@@ -2,8 +2,6 @@
   "permissions": {
     "deny": [
       "Bash(docker *)",
-      "Bash(git push *)",
-      "Bash(gh *)",
       "Edit(/factory/reviews/**)",
       "Write(/factory/reviews/**)"
     ]

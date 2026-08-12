@@ -1,6 +1,6 @@
 # P1-DEMO-1
 
-Status: IMPLEMENTING
+Status: VERIFYING
 
 ## Befund
 
@@ -20,6 +20,7 @@ Regression Test Plan: Ein bewusst fehlerhaft geschriebener Test-Handler, der ver
 Central Guard Plan: Ein neues, deterministisches Guard-Skript nach dem Vorbild von factory/guards/validate-finding.py (kein LLM, reines Python, AST-basiert statt Regex) prueft jede unter HANDLERS registrierte Handler-Datei in app/jobs/ darauf, dass sie app.repositories.* nicht direkt importiert und keinen rohen organization_id- oder conn-Parameter annimmt, sondern ausschliesslich ueber das ScopedRepositories-Objekt auf Daten zugreift, und wird in denselben Pruefpfad (lokal, Stop-Hook, CI) wie die bestehenden Factory-Guards eingehaengt, sodass ein Verstoss automatisch erkannt statt nur per Konvention vermieden wird.
 Expected Blast Radius: Heute ist niemand betroffen, da beide bestehenden Handler die organization_id korrekt aus dem eigenen Payload lesen (siehe app/test_multi_tenant_isolation.py, insbesondere test_job_run_with_correct_org_id_only_touches_its_own_org); die Reparatur selbst betrifft ausschliesslich app/jobs/ (queue.py, handlers.py, approval_reminder.py, audit_log_archival.py) plus ein neues Guard-Skript, keine Datenbankschema-Aenderung und keine Auswirkung auf app/services/procurement_service.py oder die bestehenden Repository-Signaturen des interaktiven Pfads.
 Risk Assessment: Das Risiko des Nichtstuns ist strukturell real (ein zukuenftiger Handler koennte unbemerkt auf falsche Organisationsdaten zugreifen), aber aktuell ohne bekannten konkreten Schaden; das Risiko der vorgeschlagenen Reparatur ist gering und gut eingrenzbar, da sie additiv ist (neues Wrapper-Objekt, neuer Guard, angepasste Handler-Signatur fuer nur zwei bestehende, gut getestete Handler) und weder Schema noch interaktiven Pfad veraendert; insgesamt eine normale, autonom vertretbare technische Entscheidung ohne irreversible Konsequenzen.
+Verification Evidence: Am 2026-08-12 auf Branch fix/P1-DEMO-1 (Commit 3d5ef6b, sauberer Working Tree) frisch ausgefuehrt: (1) Regressionstest python3 -m unittest app.jobs.test_org_scope_regression -v -- 1 Test OK, unveraenderte Sicherheits-Assertion (Organisation B bleibt bei 'submitted'); (2) relevante bestehende Tests python3 -m unittest app.jobs.test_approval_reminder app.jobs.test_audit_log_archival app.test_multi_tenant_isolation -v -- 12 Tests OK; (3) Central-Guard-Plan direkt gegen beide echten Handler: python3 factory/guards/validate-job-handler-scope.py app/jobs/approval_reminder.py und .../audit_log_archival.py -- beide GUELTIG, keine Umgehung der ScopedRepositories-Grenze erkannt; (4) kanonischer Runner python3 factory/guards/run-factory-checks.py -- Factory-Checks: ALLE BESTANDEN (Exit 0). Vollstaendiger 54er App-Testlauf zusaetzlich separat bestaetigt (siehe Build-Order, Green Runtime Fix Evidence).
 Expert Review Reason: Not yet analyzed
 What Is Known: Not yet analyzed
 What Remains Uncertain: Not yet analyzed
