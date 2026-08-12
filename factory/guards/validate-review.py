@@ -15,6 +15,18 @@ the fix really addresses the root cause, whether the regression test
 evidence is convincing, whether there are unnoticed bypass paths -- that
 judgment is the independent reviewer's job, not a Python script's.
 
+Two of the required fields, "Reviewer Agent Type" and "Reviewer Agent ID",
+are provenance fields. They are never written by the finding-closure-reviewer
+subagent's own text -- they are set exclusively by the SubagentStop hook
+(.claude/hooks/subagentstop-write-review.py) from the real Claude Code event
+data for that subagent run, at the moment the artifact is created. This
+guard checks that "Reviewer Agent Type" is exactly the one valid reviewer
+agent type; it cannot verify "Reviewer Agent ID" against anything (Claude
+Code does not expose a registry of valid agent IDs to check against), but a
+present, non-placeholder value is still required so an artifact missing
+provenance entirely -- e.g. one written some other way than the hook -- is
+rejected.
+
 This is deliberately the mirror image of factory/guards/validate-finding.py,
 which separately checks (for a finding trying to reach
 READY_FOR_CLOSURE/CLOSED) that its referenced review artifact exists and
@@ -29,6 +41,8 @@ factory/findings/*.md):
 
     Finding: <finding ID, e.g. P1-DEMO-1>
     Reviewer: <who/what performed the review, e.g. finding-closure-reviewer subagent>
+    Reviewer Agent Type: <the SubagentStop event's agent_type, hook-set only>
+    Reviewer Agent ID: <the SubagentStop event's agent_id, hook-set only>
     Reviewed Commit: <commit hash / branch, or a description of the reviewed diff basis>
     Result: PASS | FAIL | EXPERT_REVIEW_REQUIRED
     Root Cause Addressed: <yes/no + justification>
@@ -54,6 +68,8 @@ from pathlib import Path
 REQUIRED_REVIEW_FIELDS = [
     "Finding",
     "Reviewer",
+    "Reviewer Agent Type",
+    "Reviewer Agent ID",
     "Reviewed Commit",
     "Result",
     "Root Cause Addressed",
@@ -65,6 +81,11 @@ REQUIRED_REVIEW_FIELDS = [
 ]
 
 ALLOWED_RESULTS = {"PASS", "FAIL", "EXPERT_REVIEW_REQUIRED"}
+
+# The only subagent type ever authorized to produce a closure review artifact
+# (see .claude/agents/finding-closure-reviewer.md and
+# .claude/hooks/subagentstop-write-review.py).
+VALID_REVIEWER_AGENT_TYPE = "finding-closure-reviewer"
 
 PLACEHOLDER_VALUES = {
     "",
@@ -112,6 +133,17 @@ def validate_review(fields):
                 f"'Result' hat ungültigen Wert '{result_value}'. Erlaubt sind: "
                 + ", ".join(sorted(ALLOWED_RESULTS))
             )
+
+    reviewer_agent_type_value = fields.get("Reviewer Agent Type")
+    if (
+        reviewer_agent_type_value is not None
+        and reviewer_agent_type_value.strip().lower() not in PLACEHOLDER_VALUES
+        and reviewer_agent_type_value.strip() != VALID_REVIEWER_AGENT_TYPE
+    ):
+        errors.append(
+            f"'Reviewer Agent Type' hat ungültigen Wert '{reviewer_agent_type_value}'. "
+            f"Erlaubt ist ausschließlich: '{VALID_REVIEWER_AGENT_TYPE}'."
+        )
 
     finding_value = fields.get("Finding")
     if finding_value is not None and finding_value.strip().lower() not in PLACEHOLDER_VALUES:

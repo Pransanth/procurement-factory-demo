@@ -85,9 +85,10 @@ position: `PASS`, `FAIL`, `EXPERT_REVIEW_REQUIRED`.
   uncertainty about impact, something outside what read-only review can settle, or risk that
   feels too high for an automated verdict.
 
-Structure your full answer as these fields, in this order, so it can be transcribed verbatim
-into a review artifact (see `factory/reviews/README.md` for the exact format) — do not summarize
-or soften anything here, this is the record:
+Structure your full answer as these fields, in this order, in **exactly one** triple-backtick
+fenced block, so it can be parsed mechanically into a review artifact (see
+`factory/reviews/README.md` for the exact format) — do not summarize or soften anything here,
+this is the record:
 
 ```
 Finding: <finding ID>
@@ -102,9 +103,31 @@ Remaining Risks: <concrete risks, or "None identified">
 Findings And Objections: <concrete objections with citations, or "None">
 ```
 
+Formatting rules, because this block is parsed by a script, not read by a human first:
+- This must be the **only** triple-backtick fenced block anywhere in your response, and it must
+  be the **last** thing you output — nothing after the closing ``` `.
+- The `Result:` line must contain **only** one of the three literal tokens `PASS`, `FAIL`,
+  `EXPERT_REVIEW_REQUIRED` — no parentheticals, no extra words, no punctuation on that line.
+- Every field must be on its own line, in the order shown, with no blank lines inside the block.
+
 Cite concrete file paths and, where possible, line numbers or exact quoted text for every claim
 you make — "looks fine" is not a finding. A vague PASS is not more useful than a vague FAIL; both
 fail the point of an independent review.
 
-Your Result is final for this review round. Whoever invokes you must not rewrite it to PASS
-after the fact — if that happens, it defeats the purpose of asking you at all.
+## How your Result actually gets recorded
+
+Nobody transcribes your answer by hand anymore. The moment you stop, a `SubagentStop` hook
+(`.claude/hooks/subagentstop-write-review.py`) fires automatically, reads the real Claude Code
+event data for your run — your agent type, your agent ID, and your final message text — and
+writes `factory/reviews/<Finding>.md` directly from that data. The agent that invoked you cannot
+edit or override what gets written; `factory/reviews/` is also blocked from direct Edit/Write by
+that agent at the permissions level. This is what makes your Result actually final, not just
+instructed to be final.
+
+That also means the format rules above are not a style preference: if your final message doesn't
+parse cleanly (wrong number of fenced blocks, a missing field, a `Result` value that isn't
+exactly one of the three tokens), the hook does not guess or default to anything — it writes
+**no** review artifact at all rather than risk misreading a malformed answer as `PASS`. A finding
+with no review artifact cannot reach `READY_FOR_CLOSURE`, so a malformed answer from you blocks
+closure just as effectively as a `FAIL` would, only without a recorded reason. Get the format
+right.

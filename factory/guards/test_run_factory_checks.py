@@ -92,6 +92,8 @@ VALID_REVIEW = """\
 
 Finding: P1-DEMO-1
 Reviewer: finding-closure-reviewer subagent
+Reviewer Agent Type: finding-closure-reviewer
+Reviewer Agent ID: agent-test-0001
 Reviewed Commit: abc123
 Result: PASS
 Root Cause Addressed: Ja.

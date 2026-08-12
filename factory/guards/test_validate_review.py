@@ -23,6 +23,8 @@ VALID_REVIEW = """\
 
 Finding: P1-DEMO-1
 Reviewer: finding-closure-reviewer subagent
+Reviewer Agent Type: finding-closure-reviewer
+Reviewer Agent ID: agent-test-0001
 Reviewed Commit: working tree at abc123, uncommitted changes included
 Result: PASS
 Root Cause Addressed: Ja -- ScopedRepositories entfernt die frei waehlbare organization_id.
@@ -45,6 +47,8 @@ INVALID_RESULT_VALUE = """\
 
 Finding: P1-DEMO-1
 Reviewer: finding-closure-reviewer subagent
+Reviewer Agent Type: finding-closure-reviewer
+Reviewer Agent ID: agent-test-0001
 Reviewed Commit: abc123
 Result: LOOKS_GOOD_TO_ME
 Root Cause Addressed: Ja.
@@ -60,6 +64,8 @@ UNKNOWN_FINDING_REFERENCE = """\
 
 Finding: P9-DOES-NOT-EXIST
 Reviewer: finding-closure-reviewer subagent
+Reviewer Agent Type: finding-closure-reviewer
+Reviewer Agent ID: agent-test-0001
 Reviewed Commit: abc123
 Result: PASS
 Root Cause Addressed: Ja.
@@ -76,6 +82,15 @@ VALID_EXPERT_REVIEW_RESULT = VALID_REVIEW.replace("Result: PASS", "Result: EXPER
 PLACEHOLDER_FIELD = VALID_REVIEW.replace(
     "Remaining Risks: Absichtliche Umgehung ueber dynamische Attribute bleibt technisch moeglich.",
     "Remaining Risks: TBD",
+)
+
+MISSING_REVIEWER_PROVENANCE = VALID_REVIEW.replace(
+    "Reviewer Agent Type: finding-closure-reviewer\nReviewer Agent ID: agent-test-0001\n", ""
+)
+
+WRONG_REVIEWER_AGENT_TYPE = VALID_REVIEW.replace(
+    "Reviewer Agent Type: finding-closure-reviewer",
+    "Reviewer Agent Type: main-agent",
 )
 
 
@@ -116,6 +131,8 @@ class ValidateReviewTests(unittest.TestCase):
         result = self.run_guard(MISSING_FIELDS)
         self.assertEqual(result.returncode, 1)
         self.assertIn("Reviewer", result.stderr)
+        self.assertIn("Reviewer Agent Type", result.stderr)
+        self.assertIn("Reviewer Agent ID", result.stderr)
         self.assertIn("Reviewed Commit", result.stderr)
         self.assertIn("Root Cause Addressed", result.stderr)
         self.assertIn("Regression Evidence Checked", result.stderr)
@@ -138,6 +155,18 @@ class ValidateReviewTests(unittest.TestCase):
         result = self.run_guard(UNKNOWN_FINDING_REFERENCE)
         self.assertEqual(result.returncode, 1)
         self.assertIn("P9-DOES-NOT-EXIST", result.stderr)
+
+    def test_missing_reviewer_provenance_is_rejected(self):
+        result = self.run_guard(MISSING_REVIEWER_PROVENANCE)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Reviewer Agent Type", result.stderr)
+        self.assertIn("Reviewer Agent ID", result.stderr)
+
+    def test_wrong_reviewer_agent_type_is_rejected(self):
+        result = self.run_guard(WRONG_REVIEWER_AGENT_TYPE)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Reviewer Agent Type", result.stderr)
+        self.assertIn("main-agent", result.stderr)
 
 
 if __name__ == "__main__":

@@ -105,28 +105,40 @@ Insbesondere:
 
 - Er läuft nur, wenn Claude Code selbst versucht zu stoppen — er prüft nichts, wenn Dateien auf
   anderem Weg geändert werden (manuell, durch ein anderes Tool, durch ein Skript).
-- Er behandelt einen wiederholten Stopp-Versuch (`stop_hook_active: true`) **nicht** als Beweis,
-  dass ein Finding jetzt gültig ist — er prüft bei jedem einzelnen Versuch erneut den echten
-  Zustand und blockiert konsequent weiter, solange etwas tatsächlich ungültig ist.
-  Genau deshalb ist er **kein** eigenständiger Schutz vor einer Endlosschleife: Diese
-  Garantie liefert Claude Code selbst, nicht dieses Skript. Laut offizieller Dokumentation
-  überschreibt Claude Code einen Stop-Hook, nachdem er ohne erkennbaren Fortschritt acht Mal in
-  Folge blockiert hat, beendet den Turn trotzdem und zeigt dabei eine Warnung, dass der Stop-Hook
-  zu oft in Folge blockiert hat. Dieser Cap ist über die Umgebungsvariable
-  `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` konfigurierbar. Das ist die eigentliche technische Grenze:
-  Nach genügend Versuchen kann ein weiterhin ungültiger Zustand den Stopp trotzdem nicht mehr
-  verhindern — der Stop-Hook allein kann einen ungültigen Zustand also **nicht absolut**
-  ausschließen.
+- Ein erster, ungültiger Stop-Versuch wird blockiert, mit der konkreten Ursache. Ein
+  **wiederholter** Versuch (`stop_hook_active: true`) wird dagegen bewusst **nicht** erneut
+  geprüft und **nicht** erneut blockiert — er lässt Claude sofort weiterlaufen, unabhängig davon,
+  ob der Zustand inzwischen tatsächlich gültig ist. Das ist eine bewusste Verhaltensänderung:
+  Eine frühere Version dieses Hooks prüfte bei jedem Versuch erneut und verließ sich auf Claude
+  Codes eigenen, dokumentierten Block-Cap (nominell 8 aufeinanderfolgende Blockierungen ohne
+  Fortschritt, konfigurierbar über `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`), um eine echte
+  Endlosschleife zu verhindern. In der Praxis griff dieser Cap nicht zuverlässig — eine Sitzung
+  blieb über viele Wiederholungen hinweg blockiert hängen, ohne dass der Cap eingriff, und ohne
+  lokale Möglichkeit, das anders als durch manuelles Eingreifen außerhalb der Session zu beheben.
+  Sich auf einen Plattform-Cap zu verlassen, der nicht zuverlässig greift, ist keine echte
+  Schleifensicherheit. Dieser Hook liefert deshalb seine eigene, einfache Garantie: höchstens eine
+  Blockierung pro Aufgabe.
+
+  Das bedeutet auch: Ein zweiter Stop-Versuch kommt immer durch, selbst wenn der Zustand
+  tatsächlich weiterhin ungültig ist. Das schwächt **keine** der eigentlichen Prüfregeln —
+  `validate-finding.py`, `validate-review.py` und `run-factory-checks.py` selbst bleiben
+  unverändert scharf. Es ändert nur, ob *dieser lokale Hook* einen zweiten Versuch aufhält. Ob ein
+  Finding wirklich abschließbar ist, entscheiden weiterhin ausschließlich die deterministischen
+  Guards und, verbindlich, GitHub CI.
 - Er läuft mit den Rechten des lokalen Nutzers und lässt sich durch Konfiguration umgehen oder
   deaktivieren (z. B. Hooks überspringen, Einstellungen ändern). Ein Nutzer mit
   Schreibzugriff auf `.claude/settings.json` kann ihn jederzeit abschalten.
 - Er prüft nur formale Vollständigkeit der Finding-Felder, nicht deren inhaltliche Richtigkeit.
 
 Ein wirklich verlässliches Gate — z. B. bevor Code in einen geschützten Branch gelangt — braucht
-eine serverseitige Prüfung (CI), die nicht vom lokalen Rechner oder von Claude Code selbst
-abhängt. Diese Schicht gibt es jetzt: siehe "Die Prüfkette: lokal bis CI" weiter unten. (Ein
-Branch-Schutz, der einen fehlgeschlagenen CI-Lauf tatsächlich verbindlich macht, ist noch nicht
-konfiguriert — CI prüft aktuell, blockiert aber noch keinen Merge.)
+eine serverseitige Prüfung (CI), die nicht vom lokalen Rechner, von Claude Code oder von diesem
+Hook abhängt. Genau das ist GitHub CI (`.github/workflows/factory-ci.yml`): Sie läuft unabhängig
+von jeder Claude-Code-Sitzung und lässt sich nicht dadurch umgehen, dass eine lokale Aufgabe (mit
+oder ohne Stop-Hook-Blockierung) beendet wird. Das ist die eigentliche, externe Schranke dieses
+Repos — der Stop-Hook ist bewusst nur eine lokale Arbeitshilfe während einer laufenden Session,
+kein Ersatz dafür. (Ein Branch-Schutz mit Required Status Check, der einen fehlgeschlagenen
+CI-Lauf tatsächlich verbindlich macht, ist noch nicht konfiguriert — CI prüft aktuell, blockiert
+aber noch keinen Merge; das bleibt ein offener Schritt außerhalb dieser Sitzung.)
 
 ## Shared vs. local Claude settings
 
@@ -166,8 +178,9 @@ GitHub CI                    .github/workflows/factory-ci.yml        (ruft dense
 ```
 
 Der Stop-Hook hilft **Claude**, lokal innerhalb einer laufenden Session korrekt zu arbeiten — er
-ist an das Claude-Code-Stop-Ereignis gekoppelt und hat, wie oben beschrieben, eine dokumentierte
-technische Grenze (der 8-Block-Cap).
+ist an das Claude-Code-Stop-Ereignis gekoppelt und hat, wie oben beschrieben, eine bewusste
+technische Grenze: Er blockiert einen ungültigen Zustand höchstens einmal pro Aufgabe, nicht
+wiederholt.
 
 **Die GitHub-CI (`factory-ci.yml`) ist davon komplett unabhängig.** Sie kennt keine Claude-Session,
 keinen Stop-Hook und kein `stop_hook_active` — sie checkt bei jedem Push auf `main` und bei jedem

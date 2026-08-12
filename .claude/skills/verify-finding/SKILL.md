@@ -64,25 +64,37 @@ prompt, include:
   with exactly one of `PASS` / `FAIL` / `EXPERT_REVIEW_REQUIRED`, formatted as the field block
   described there.
 
-**Hard rule: you must not rewrite, soften, or reinterpret the reviewer's `Result`.** Transcribe
-it verbatim into the review artifact in Step 3. If you disagree with the verdict, say so to the
-user — do not silently override it. Re-invoking the reviewer to "try again" hoping for a
-different answer defeats its independence; only re-invoke it if you are giving it materially new
+**Hard rule: you must not rewrite, soften, or reinterpret the reviewer's `Result`.** You no
+longer transcribe it at all — see Step 3. If you disagree with the verdict, say so to the user —
+do not silently override it. Re-invoking the reviewer to "try again" hoping for a different
+answer defeats its independence; only re-invoke it if you are giving it materially new
 information (e.g. you fixed something it flagged) and are running an entirely new review round.
 
-## Step 3 — Write the review artifact
+## Step 3 — Confirm the review artifact the hook produced
 
-Create `factory/reviews/<ID>.md` (see `factory/reviews/README.md` for the exact required
-fields and format) with the reviewer's answer transcribed **verbatim** — same field values, same
-`Result`, same citations. Do not add your own editorializing into the reviewer's fields.
+You do not write `factory/reviews/<ID>.md` yourself anymore. The moment the reviewer subagent in
+Step 2 finishes, a `SubagentStop` hook
+(`.claude/hooks/subagentstop-write-review.py`) fires automatically: it reads the real Claude Code
+event data for that subagent run (`agent_type`, `agent_id`, `last_assistant_message`) and writes
+`factory/reviews/<ID>.md` directly from it — never from your own memory or summary of what the
+reviewer said. `factory/reviews/` is also denied to the `Edit`/`Write` tools in
+`.claude/settings.json`, so you cannot create or modify a review artifact there even if you tried.
 
-Validate it structurally:
+After the Agent tool call in Step 2 returns, confirm what the hook actually produced — do not
+assume it worked:
 ```
 python3 factory/guards/validate-review.py factory/reviews/<ID>.md
 ```
-If this fails, the reviewer's answer was missing a required field or used an invalid `Result`
-value — go back and get a complete answer from the reviewer; do not patch the review artifact
-yourself with invented content.
+- If `factory/reviews/<ID>.md` doesn't exist, or this command fails: the reviewer's answer either
+  didn't come from the expected agent type, was malformed (missing field, ambiguous or invalid
+  `Result` value, wrong number of fenced blocks), or was otherwise rejected by the hook — the hook
+  deliberately never writes a `PASS` artifact from unparseable input. Read the reviewer's actual
+  response to understand what went wrong, then either fix the reviewer's prompt/format guidance
+  and get a fresh answer (a new review round, not a retry of the same one), or escalate. **Never
+  hand-author or patch the review artifact yourself** — if the hook didn't produce it, it isn't a
+  valid review artifact, full stop.
+- If it validates: proceed to Step 4. The `Result` you act on there is read from this file, which
+  by construction matches the hook's SubagentStop capture, not any restatement by you.
 
 ## Step 4 — Act on the verdict
 

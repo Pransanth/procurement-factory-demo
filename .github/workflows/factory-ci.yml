@@ -36,3 +36,6 @@ jobs:
 
       - name: Run Stop hook tests
         run: python3 .claude/hooks/test_stop_validate_findings.py -v
+
+      - name: Run SubagentStop review hook tests
+        run: python3 .claude/hooks/test_subagentstop_write_review.py -v
