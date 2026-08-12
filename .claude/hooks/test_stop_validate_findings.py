@@ -8,10 +8,13 @@ unittest module path like "factory.guards.test_validate_finding" -- running
 the file directly works the same way via its own unittest.main() call.)
 
 Each test builds a throwaway project directory (a copy of the real
-factory/guards/validate-finding.py and run-factory-checks.py, plus one
-finding file) and points the hook at it via CLAUDE_PROJECT_DIR, then
-invokes the hook exactly the way Claude Code does: JSON on stdin, exit code
-as the result. The real factory/findings/P1-DEMO-1.md is never touched.
+factory/guards/validate-finding.py, run-factory-checks.py and
+validate-job-handler-scope.py, plus one finding file) and points the hook
+at it via CLAUDE_PROJECT_DIR, then invokes the hook exactly the way Claude
+Code does: JSON on stdin, exit code as the result. The real
+factory/findings/P1-DEMO-1.md and the real app/jobs/ are never touched --
+these throwaway projects have no app/jobs/ directory at all, which
+run-factory-checks.py treats as "nothing to check" for that dimension.
 """
 import json
 import os
@@ -96,6 +99,10 @@ class StopHookTests(unittest.TestCase):
         shutil.copy2(REAL_GUARDS_DIR / "validate-finding.py", guards_dir / "validate-finding.py")
         shutil.copy2(
             REAL_GUARDS_DIR / "run-factory-checks.py", guards_dir / "run-factory-checks.py"
+        )
+        shutil.copy2(
+            REAL_GUARDS_DIR / "validate-job-handler-scope.py",
+            guards_dir / "validate-job-handler-scope.py",
         )
         # Always the same single finding file, its content changes per test
         # to simulate "the finding gets fixed between two stop attempts".

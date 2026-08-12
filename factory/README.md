@@ -27,18 +27,29 @@ genau eine Datei und weiß nichts von anderen Findings oder davon, wer ihn aufru
 ## Was ist der gemeinsame Factory-Runner?
 
 [`factory/guards/run-factory-checks.py`](guards/run-factory-checks.py) ist der **eine
-kanonische Einstiegspunkt** für "sind alle Factory-Prüfungen aktuell grün?". Er findet alle
-Finding-Dateien unter `factory/findings/`, lässt jede einzelne vom Validator prüfen, und liefert
-ein Gesamtergebnis:
+kanonische Einstiegspunkt** für "sind alle Factory-Prüfungen aktuell grün?":
 
 ```
 python3 factory/guards/run-factory-checks.py
 ```
 
 Exit 0 = alle Checks bestanden, Exit 1 = mindestens einer fehlgeschlagen — mit einer klaren
-Auflistung, welcher Check bei welcher Datei fehlgeschlagen ist. Heute gibt es nur eine Art Check
-(Finding-Validierung); künftige Checks würden ebenfalls von hier aus laufen, statt an mehreren
-Stellen eigene Prüflogik zu duplizieren.
+Auflistung, welcher Check bei welcher Datei fehlgeschlagen ist. Er führt aktuell zwei Arten von
+Check aus, beide ohne KI, ohne Netzwerk, rein regelbasiert:
+
+1. **Finding-Validierung**: jede Datei unter `factory/findings/` gegen
+   [`validate-finding.py`](guards/validate-finding.py).
+2. **Job-Handler-Scope-Guard**: jede Datei unter `app/jobs/` gegen
+   [`validate-job-handler-scope.py`](guards/validate-job-handler-scope.py) — ein AST-basierter
+   Guard, der prüft, dass ein Background-Job-Handler die in
+   [`factory/findings/P1-DEMO-1.md`](findings/P1-DEMO-1.md) beschriebene
+   `ScopedRepositories`-Grenze nicht umgeht (z. B. durch direkten Import von
+   `app.repositories.*`, einen wieder freigegebenen `organization_id`-/`conn`-Parameter, oder
+   Zugriff auf `scope._conn`). Dieser Guard ist eine **zusätzliche** Schranke — die eigentliche
+   Sicherheitsgrenze ist die Laufzeit-Architektur (`ScopedRepositories`), nicht dieser Guard.
+
+Künftige Checks würden ebenfalls von hier aus laufen, statt an mehreren Stellen eigene
+Prüflogik zu duplizieren.
 
 ## Was macht der Stop-Hook?
 

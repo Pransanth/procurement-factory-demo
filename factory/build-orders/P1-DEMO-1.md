@@ -266,3 +266,132 @@ Der AST-basierte Factory-Guard (Schritt 5) ist noch nicht gebaut. Die primäre G
 Umgehungsversuch — z. B. ein zukünftiger Handler, der `app.repositories.*` direkt importiert
 oder auf das private Attribut `scope._conn` zugreift — ist damit noch nicht automatisiert
 erkennbar. Das ist genau die Restlücke, die der AST-Guard in Schritt 5 schließen soll.
+
+## Central Guard Evidence
+
+Schritt 5 aus der verbindlichen Reihenfolge ist erfüllt: Ein deterministischer, KI-freier
+AST-Guard prüft Background-Job-Handler auf Umgehungsversuche der `ScopedRepositories`-Grenze
+und ist in den kanonischen Factory-Runner eingehängt. Die primäre Sicherheitsgrenze bleibt
+`ScopedRepositories` — dieser Guard ist eine zweite, zusätzliche Entwicklungs-/CI-Schranke.
+
+### Neue Datei
+
+[`factory/guards/validate-job-handler-scope.py`](../guards/validate-job-handler-scope.py)
+
+### Was als "produktiver Handler" zählt
+
+Eine Datei zählt als Handler, wenn ihr Modulkörper einen Aufruf von `register(...)` auf
+Modulebene enthält — genau das, was `app/jobs/approval_reminder.py` und
+`app/jobs/audit_log_archival.py` heute zu Handlern macht. Das ist eine strukturelle Eigenschaft
+der Datei (sie registriert einen `job_type`), keine Namenskonvention, die gepflegt werden
+müsste. Dateien ohne diesen Aufruf — `app/jobs/queue.py`, `app/jobs/handlers.py`,
+`app/jobs/scoped_repositories.py`, jede `app/jobs/test_*.py`-Datei — gelten nicht als Handler
+und werden trivial als bestanden markiert ("kein Handler, übersprungen"); insbesondere wird
+`scoped_repositories.py` selbst nie fälschlich als Handler behandelt, obwohl es legitim
+`app.repositories` importiert und `_conn` definiert.
+
+### Welche Umgehungen erkannt werden
+
+1. **Direkter Import von `app.repositories` (oder eines Untermoduls)** in einer Handler-Datei —
+   sowohl `from app.repositories import X` als auch `import app.repositories.X`.
+2. **Wiedereingeführte rohe Verbindung oder frei wählbare Organisation**: Die über `register()`
+   registrierte Handler-Funktion wird auf Parameter namens `conn`, `connection`,
+   `organization_id` oder `org_id` geprüft — das sanktionierte API ist exakt
+   `handle(scope, payload)`.
+3. **Zugriff auf `scope._conn`**: jeder Attributzugriff auf `_conn` irgendwo in der Datei — das
+   private Interna, unter dem `ScopedRepositories` seine gebundene Verbindung speichert.
+
+### Was bewusst nicht erkannt wird — und warum
+
+Datenfluss-Analyse, Indirektion (`importlib`, `getattr(module, "repositories")`,
+dynamisch zusammengesetzte Importpfade) und andere Formen dynamischen Attributzugriffs werden
+bewusst nicht verfolgt. Ein einfacher, nachvollziehbarer AST-Guard mit drei klaren Regeln ist
+das Ziel, kein vollständiger Static-Analyzer, der versucht, jede denkbare Umgehung in Pythons
+dynamischem Typsystem abzudecken. Ein hartnäckiger, absichtlicher Umgehungsversuch bliebe
+technisch weiterhin möglich — das ist eine bekannte, akzeptierte Grenze dieser zweiten Schicht,
+kein Widerspruch zu ihrem Zweck: Sie soll die naheliegenden, realistischen Umgehungen fangen,
+nicht jede.
+
+### Negativbeweis
+
+Unit-Tests in [`factory/guards/test_validate_job_handler_scope.py`](../guards/test_validate_job_handler_scope.py)
+prüfen den Guard direkt gegen temporäre Fixture-Dateien (nie gegen echte Dateien unter
+`app/jobs/`) für jede der drei Regeln einzeln sowie eine Kombination aller drei; alle 7 Tests
+bestehen. Zusätzlich beweist ein manueller End-to-End-Lauf gegen den **echten kanonischen
+Runner** (mit `--jobs-dir` auf ein temporäres Verzeichnis, damit kein echter Handler angefasst
+wird), dass die Integration tatsächlich funktioniert:
+
+```
+python3 factory/guards/validate-job-handler-scope.py <fixture>/bad_job.py
+```
+```
+UNGÜLTIG: <fixture>/bad_job.py
+  - Zeile 2: direkter Import von 'app.repositories' -- Handler dürfen org-gescopte Repositories
+    nur über das gebundene ScopedRepositories-Objekt erreichen, nicht direkt importieren.
+  - Zeile 7: Handler-Funktion 'handle' hat einen Parameter namens 'conn' -- das sanktionierte
+    API ist handle(scope, payload); ein Parameter mit diesem Namen deutet auf eine rohe
+    Connection oder eine frei wählbare organization_id hin.
+```
+
+```
+python3 factory/guards/run-factory-checks.py --jobs-dir <fixture-dir>
+```
+```
+[FEHLER] job-handler-guard: bad_job.py
+           UNGÜLTIG: <fixture>/bad_job.py
+             - Zeile 2: direkter Import von 'app.repositories' ...
+             - Zeile 7: Handler-Funktion 'handle' hat einen Parameter namens 'conn' ...
+Factory-Checks: FEHLGESCHLAGEN
+```
+
+Exit-Code in beiden Fällen `1`. Kein echter Handler unter `app/jobs/` wurde für diesen Beweis
+verändert.
+
+### Integration in den kanonischen Runner
+
+`factory/guards/run-factory-checks.py` führt jetzt zwei Prüfarten in einem Lauf aus: die
+bestehende Finding-Validierung (`factory/findings/*.md`) und, neu, den Job-Handler-Guard gegen
+jede `*.py`-Datei unter `app/jobs/` (ohne `test_*.py`). Beide Prüfarten laufen über dieselbe
+Runner-Logik — es gibt weiterhin nur einen Ort, an dem "sind alle Factory-Checks grün?"
+entschieden wird:
+
+```
+lokaler Guard         factory/guards/validate-job-handler-scope.py   (prueft 1 Datei)
+        ↓
+gemeinsamer Runner     factory/guards/run-factory-checks.py           (prueft Findings + Jobs)
+        ↓
+Claude Stop-Hook        .claude/hooks/stop-validate-findings.py        (ruft den Runner auf, unveraendert)
+        ↓
+GitHub CI                .github/workflows/factory-ci.yml               (ruft denselben Runner-Befehl)
+```
+
+Der Stop-Hook musste **nicht** geändert werden — er ruft bereits nur `run-factory-checks.py`
+ohne eigene Argumente auf und bekommt die neue Prüfung dadurch automatisch mit. Einzige
+Anpassung an CI: die neue Testdatei `factory.guards.test_validate_job_handler_scope` wurde dem
+bestehenden "Run factory guard tests"-Schritt hinzugefügt, damit ihre eigenen Unit-Tests
+ebenfalls in CI laufen.
+
+### Testergebnisse (vollständig, dieser Schritt)
+
+```
+python3 -m unittest factory.guards.test_validate_job_handler_scope -v
+# Ran 7 tests -> OK
+
+python3 -m unittest app.jobs.test_org_scope_regression app.jobs.test_approval_reminder \
+  app.jobs.test_audit_log_archival app.test_multi_tenant_isolation \
+  app.test_db app.repositories.test_organizations app.repositories.test_users \
+  app.repositories.test_suppliers app.repositories.test_procurement_requests \
+  app.repositories.test_approvals app.repositories.test_audit_log \
+  app.services.test_procurement_service app.jobs.test_queue -v
+# Ran 54 tests -> OK
+
+python3 -m unittest factory.guards.test_validate_finding factory.guards.test_run_factory_checks \
+  factory.guards.test_validate_job_handler_scope -v
+# Ran 22 tests -> OK
+
+python3 .claude/hooks/test_stop_validate_findings.py -v
+# Ran 4 tests -> OK
+
+python3 factory/guards/run-factory-checks.py
+# Factory-Checks: ALLE BESTANDEN
+```
