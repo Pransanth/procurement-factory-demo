@@ -20,7 +20,7 @@ class TestJobQueue(unittest.TestCase):
         self.assertIn('"foo": "bar"', job.payload)
 
     def test_run_pending_marks_succeeded_and_stores_result(self):
-        def handler(conn, payload):
+        def handler(scope, payload):
             return {"seen_org": payload["organization_id"]}
 
         job_id = queue.enqueue(self.conn, "noop", self.org.id)
@@ -32,10 +32,10 @@ class TestJobQueue(unittest.TestCase):
         self.assertIn(str(self.org.id), job.result)
 
     def test_handler_exception_marks_job_failed_without_crashing_batch(self):
-        def boom(conn, payload):
+        def boom(scope, payload):
             raise RuntimeError("handler blew up")
 
-        def ok(conn, payload):
+        def ok(scope, payload):
             return {"ok": True}
 
         failing_job_id = queue.enqueue(self.conn, "boom", self.org.id)
@@ -60,7 +60,7 @@ class TestJobQueue(unittest.TestCase):
 
     def test_scheduled_for_future_is_not_run_yet(self):
         queue.enqueue(self.conn, "noop", self.org.id, scheduled_for="2099-01-01T00:00:00+00:00")
-        results = queue.run_pending(self.conn, handlers={"noop": lambda conn, payload: {}}, now="2026-01-01T00:00:00+00:00")
+        results = queue.run_pending(self.conn, handlers={"noop": lambda scope, payload: {}}, now="2026-01-01T00:00:00+00:00")
         self.assertEqual(results, [])
 
 

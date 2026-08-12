@@ -1,16 +1,16 @@
 """Background job: remind approvers about procurement requests that have
 been sitting in 'submitted' status too long.
 
-Like every job handler in app/jobs/, this reads organization_id from its
-own payload (see app/jobs/queue.py) and threads it through to every
-repository call it makes. Nothing outside this function enforces that it
-does so correctly.
+Like every job handler in app/jobs/, this receives a ScopedRepositories
+instance already bound to the job's own organization (see
+app/jobs/scoped_repositories.py and app/jobs/queue.py). It never imports
+app.repositories.* directly and has no parameter through which it could
+address a different organization.
 """
 
 from datetime import datetime, timedelta, timezone
 
 from app.jobs.handlers import register
-from app.repositories import audit_log, procurement_requests
 
 JOB_TYPE = "approval_reminder"
 DEFAULT_OLDER_THAN_HOURS = 24
@@ -25,17 +25,14 @@ def _hours_before(now_iso, hours):
     return (now_dt - timedelta(hours=hours)).isoformat()
 
 
-def handle(conn, payload):
-    organization_id = payload["organization_id"]
+def handle(scope, payload):
     older_than_hours = payload.get("older_than_hours", DEFAULT_OLDER_THAN_HOURS)
     now = payload.get("now") or _now()
     cutoff = _hours_before(now, older_than_hours)
 
-    pending = procurement_requests.list_pending_older_than(conn, organization_id, cutoff)
+    pending = scope.list_pending_procurement_requests_older_than(cutoff)
     for request in pending:
-        audit_log.record(
-            conn,
-            organization_id,
+        scope.record_audit_log(
             action="approval_reminder.sent",
             entity_type="procurement_request",
             entity_id=request.id,

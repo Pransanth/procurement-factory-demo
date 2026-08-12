@@ -1,23 +1,26 @@
 """A deliberately simple in-process background job queue.
 
-`enqueue` stores organization_id both as a queue-level column (cheap to
-query, e.g. "all pending jobs for org X") and inside the JSON payload
-itself — the payload copy is the one that matters, because that's what a
-handler actually receives.
+`enqueue` stores organization_id both as a queue-level column (the
+authoritative value) and, for observability/debugging, inside the JSON
+payload as well. The payload copy is NOT used for authorization — see
+below.
 
 `run_pending` processes ALL due jobs across ALL organizations in one pass,
 the way a real worker process would: it is not scoped to any single tenant.
-For each job it looks up the handler by job_type and calls
-`handler(conn, payload)`. There is no shared "current organization" context
-object, thread-local, or connection-level filter injected here — a handler
-gets exactly its own payload and is on its own to use the organization_id
-inside it correctly. That absence is intentional: see app/jobs/handlers.py.
+For each due job it builds a ScopedRepositories instance bound to that
+job's own `organization_id` column (never to anything read from the
+job's payload, which is job-supplied data and not trusted for scoping),
+and calls `handler(scope, payload)`. This is the primary runtime security
+boundary described in factory/findings/P1-DEMO-1.md: a handler receives
+only this bound object and has no parameter through which it could name a
+different organization. See app/jobs/scoped_repositories.py.
 """
 
 import json
 from datetime import datetime, timezone
 
 from app.jobs.handlers import HANDLERS
+from app.jobs.scoped_repositories import ScopedRepositories
 from app.models import Job
 
 
@@ -76,6 +79,7 @@ def run_pending(conn, handlers=None, now=None):
         job_id = row["id"]
         job_type = row["job_type"]
         payload = json.loads(row["payload"])
+        scope = ScopedRepositories(conn, row["organization_id"])
 
         conn.execute(
             "UPDATE jobs SET status = 'running', started_at = ? WHERE id = ?", (run_at, job_id)
@@ -89,7 +93,7 @@ def run_pending(conn, handlers=None, now=None):
             continue
 
         try:
-            result = handler(conn, payload)
+            result = handler(scope, payload)
         except Exception as exc:
             _finish(conn, job_id, "failed", run_at, error=str(exc))
             results.append({"job_id": job_id, "status": "failed"})

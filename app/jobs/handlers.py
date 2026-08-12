@@ -1,13 +1,14 @@
 """Registry mapping job_type -> handler function.
 
 This registry centralizes exactly one thing: which function runs for which
-job_type. It does NOT centralize or enforce anything about which
-organization a job is allowed to touch — there is no shared "current org"
-context here. Each handler receives its full JSON payload (which always
-contains organization_id, see app/jobs/queue.py:enqueue) and is
-individually responsible for reading that value and using it to scope its
-own database access. A future handler that forgets to do so would not be
-caught by anything in this module.
+job_type. It does not itself enforce anything about which organization a
+job is allowed to touch — that is the job of app/jobs/scoped_repositories.py
+and app/jobs/queue.py:run_pending, which construct a ScopedRepositories
+instance for each job and call `handler(scope, payload)`. A registered
+handler's signature is therefore `handle(scope, payload)`, not
+`handle(conn, payload)`: it receives a tenant-bound facade, not a raw
+database connection, so it has no parameter through which it could
+address a different organization.
 """
 
 HANDLERS = {}

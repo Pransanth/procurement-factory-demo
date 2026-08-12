@@ -2,6 +2,7 @@ import unittest
 
 from app.db import init_db
 from app.jobs import approval_reminder, queue
+from app.jobs.scoped_repositories import ScopedRepositories
 from app.repositories import audit_log, organizations, procurement_requests, suppliers, users
 
 
@@ -23,9 +24,10 @@ class TestApprovalReminderJob(unittest.TestCase):
         old_request = self._submitted_request("2026-01-01T00:00:00+00:00")
         recent_request = self._submitted_request("2026-06-01T00:00:00+00:00")
 
+        scope = ScopedRepositories(self.conn, self.org.id)
         result = approval_reminder.handle(
-            self.conn,
-            {"organization_id": self.org.id, "older_than_hours": 24, "now": "2026-06-02T00:00:00+00:00"},
+            scope,
+            {"older_than_hours": 24, "now": "2026-06-02T00:00:00+00:00"},
         )
 
         self.assertEqual(result["reminded_count"], 1)
@@ -35,7 +37,8 @@ class TestApprovalReminderJob(unittest.TestCase):
         self.assertEqual(actions, ["approval_reminder.sent"])
 
     def test_no_pending_requests_means_no_reminders(self):
-        result = approval_reminder.handle(self.conn, {"organization_id": self.org.id})
+        scope = ScopedRepositories(self.conn, self.org.id)
+        result = approval_reminder.handle(scope, {})
         self.assertEqual(result, {"reminded_count": 0, "request_ids": []})
 
     def test_runs_end_to_end_through_the_queue(self):

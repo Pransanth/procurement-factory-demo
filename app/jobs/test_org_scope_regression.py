@@ -21,6 +21,16 @@ P1-DEMO-1 is real, not a mistake in this test. Do not "fix" this test by
 weakening or removing that assertion — it must turn green only as a
 consequence of the runtime security boundary described in the build
 order being implemented.
+
+Status update (post runtime-fix): app/jobs/queue.py now calls every
+handler as `handler(scope, payload)`, where `scope` is a
+ScopedRepositories instance bound to the job's own organization (see
+app/jobs/scoped_repositories.py). The buggy handler below was adapted to
+this new calling convention ONLY — it still receives the exact same
+payload and still tries to act on Organization B's request id. The
+assertions and their messages below are unchanged. They now pass, because
+`scope` no longer accepts an organization_id argument at all, so the
+handler has no way left to name Organization B.
 """
 
 import unittest
@@ -30,19 +40,21 @@ from app.jobs import queue
 from app.repositories import organizations, procurement_requests, suppliers, users
 
 
-def _buggy_handler_ignores_its_own_job_org(conn, payload):
+def _buggy_handler_ignores_its_own_job_org(scope, payload):
     """Stand-in for a future developer mistake.
 
-    A correct handler would use payload["organization_id"] (the org the
-    queue actually enqueued this job for). This handler instead acts on
-    payload["acts_on_organization_id"], representing a wrong-variable /
-    copy-paste bug. Nothing in the current job infrastructure or
-    repository layer notices or prevents the mismatch.
+    Before the runtime fix, this handler used the raw sqlite3 connection
+    to call procurement_requests.update_status() directly with
+    payload["acts_on_organization_id"] (Organization B) instead of the
+    job's own organization — and that call succeeded. `scope` no longer
+    exposes any method that accepts an organization_id argument, so the
+    handler cannot express that mistake through the public API anymore;
+    the closest it can still do is pass Organization B's request id to a
+    scope method that is permanently bound to Organization A.
     """
-    wrong_org_id = payload["acts_on_organization_id"]
     target_request_id = payload["target_request_id"]
-    procurement_requests.update_status(conn, wrong_org_id, target_request_id, "approved")
-    return {"updated_request_id": target_request_id}
+    updated = scope.update_procurement_request_status(target_request_id, "approved")
+    return {"attempted_request_id": target_request_id, "actually_updated": updated is not None}
 
 
 class TestOrgScopeRegressionP1Demo1(unittest.TestCase):

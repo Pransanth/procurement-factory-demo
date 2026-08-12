@@ -2,6 +2,7 @@ import unittest
 
 from app.db import init_db
 from app.jobs import audit_log_archival, queue
+from app.jobs.scoped_repositories import ScopedRepositories
 from app.repositories import audit_log, organizations
 
 
@@ -18,9 +19,10 @@ class TestAuditLogArchivalJob(unittest.TestCase):
             self.conn, self.org.id, action="recent", entity_type="t", now="2026-06-01T00:00:00+00:00"
         )
 
+        scope = ScopedRepositories(self.conn, self.org.id)
         result = audit_log_archival.handle(
-            self.conn,
-            {"organization_id": self.org.id, "older_than_days": 90, "now": "2026-06-02T00:00:00+00:00"},
+            scope,
+            {"older_than_days": 90, "now": "2026-06-02T00:00:00+00:00"},
         )
 
         self.assertEqual(result["archived_count"], 1)
@@ -38,7 +40,8 @@ class TestAuditLogArchivalJob(unittest.TestCase):
         )
 
     def test_nothing_to_archive_is_a_no_op(self):
-        result = audit_log_archival.handle(self.conn, {"organization_id": self.org.id})
+        scope = ScopedRepositories(self.conn, self.org.id)
+        result = audit_log_archival.handle(scope, {})
         self.assertEqual(result, {"archived_count": 0})
 
     def test_runs_end_to_end_through_the_queue(self):
