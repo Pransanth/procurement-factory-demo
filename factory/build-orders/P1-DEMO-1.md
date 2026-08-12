@@ -111,3 +111,71 @@ Die Umsetzung gilt erst als abgeschlossen, wenn **alle** Punkte erfüllt sind:
 Dieser Bauauftrag enthält selbst keinen Testcode, keinen Produktionscode und keinen Guard-Code.
 Er setzt `P1-DEMO-1` nicht auf `IMPLEMENTING`. Die Umsetzung beginnt erst, wenn dieser
 Bauauftrag freigegeben und die Statusänderung explizit vorgenommen wird.
+
+## Red Regression Evidence
+
+Schritt 1 aus der verbindlichen Reihenfolge oben ist erfüllt: Es existiert ein Regressionstest,
+der die Root Cause von `P1-DEMO-1` mit dem heutigen, unveränderten Produktionscode beweist. Der
+Test verwendet ausschließlich bereits existierende APIs (`app.db.init_db`,
+`app.repositories.*`, `app.jobs.queue.enqueue/run_pending/get_by_id`) — kein
+`ScopedRepositories`, kein AST-Guard, keine Migration.
+
+**Testdatei:** `app/jobs/test_org_scope_regression.py`
+**Exakter Testname:** `app.jobs.test_org_scope_regression.TestOrgScopeRegressionP1Demo1.test_job_scoped_to_org_a_must_not_be_able_to_mutate_org_b_data`
+**Exakter Befehl:**
+```
+python3 -m unittest app.jobs.test_org_scope_regression -v
+```
+
+**Simulierter fehlerhafter Job:** Ein Job wird über `queue.enqueue(conn, "buggy_reminder_job",
+org_a.id, payload={...})` für Organisation A eingeplant und von der Job-Infrastruktur
+anstandslos unter `organization_id = org_a.id` akzeptiert. Der zugehörige (bewusst fehlerhafte)
+Handler `_buggy_handler_ignores_its_own_job_org` ignoriert jedoch `payload["organization_id"]`
+und verwendet stattdessen `payload["acts_on_organization_id"]` (Organisation B) für einen
+tenant-gebundenen Repository-Aufruf (`procurement_requests.update_status`) — ein realistischer
+Stellvertreter für einen Variablen-/Copy-Paste-Fehler, wie ihn ein künftiger Handler machen
+könnte.
+
+**Erwartetes Sicherheitsverhalten:** Ein Job, den die Job-Infrastruktur selbst Organisation A
+zugeordnet hat, darf niemals Daten von Organisation B verändern können. Konkret: der
+`procurement_request` von Organisation B muss nach dem Job-Lauf weiterhin den Status
+`submitted` haben.
+
+**Tatsächlich beobachtetes Verhalten (heutiger Code):**
+- Die Job-Infrastruktur akzeptiert den Job anstandslos unter `organization_id = org_a.id`
+  (verifiziert vor dem Lauf).
+- `queue.run_pending()` führt den fehlerhaften Handler aus und meldet den Job als
+  `succeeded` — es gibt keine Fehlermeldung, keine Exception, keine Warnung.
+- Der `procurement_request` von Organisation B wurde tatsächlich von `submitted` auf
+  `approved` verändert.
+- Es existiert keine zentrale technische Schranke in `app/jobs/queue.py` oder
+  `app/repositories/procurement_requests.py`, die dies verhindert hätte.
+
+**Relevante Failure-Ausgabe (Lauf vor dem Fix):**
+```
+FAIL: test_job_scoped_to_org_a_must_not_be_able_to_mutate_org_b_data (app.jobs.test_org_scope_regression.TestOrgScopeRegressionP1Demo1)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "app/jobs/test_org_scope_regression.py", line 97, in test_job_scoped_to_org_a_must_not_be_able_to_mutate_org_b_data
+    self.assertEqual(
+AssertionError: 'approved' != 'submitted'
+- approved
++ submitted
+ : SECURITY: a background job enqueued for Organization A was able to change Organization B's
+   procurement request status from 'submitted' to 'approved'. There is no central technical
+   boundary in app/jobs/queue.py or app/repositories/procurement_requests.py that prevents a
+   handler from acting on a different organization than the one its job belongs to.
+
+Ran 1 test in 0.003s
+
+FAILED (failures=1)
+```
+
+Der Fehlschlag ist ein `AssertionError` an genau der Sicherheits-Assertion (`FAIL`), keine
+Exception durch fehlenden Import, fehlende Klasse oder Syntaxfehler (`ERROR`) — der Test schlägt
+ausschließlich wegen der real vorhandenen Sicherheitslücke fehl.
+
+**Baseline-Bestätigung:** Der vollständige bestehende App-Test-Lauf (53 Tests, siehe
+`app/README.md`) bleibt unverändert grün — dieser Regressionstest wurde separat und zusätzlich
+ausgeführt, kein bestehender Test wurde verändert oder abgeschwächt, kein Produktionscode wurde
+angefasst.
