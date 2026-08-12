@@ -31,6 +31,9 @@ jobs:
       - name: Run canonical factory checks
         run: python3 factory/guards/run-factory-checks.py
 
+      - name: Run application test suite
+        run: python3 factory/guards/run-app-tests.py
+
       - name: Run factory guard tests
         run: python3 -m unittest factory.guards.test_validate_finding factory.guards.test_run_factory_checks factory.guards.test_validate_job_handler_scope factory.guards.test_validate_review -v
 

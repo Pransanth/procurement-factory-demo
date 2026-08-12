@@ -3,14 +3,29 @@
     "deny": [
       "Bash(docker *)",
       "Edit(/factory/reviews/**)",
-      "Write(/factory/reviews/**)"
+      "Write(/factory/reviews/**)",
+      "Edit(/.claude/hooks/**)",
+      "Write(/.claude/hooks/**)",
+      "Edit(/.claude/skills/**)",
+      "Write(/.claude/skills/**)",
+      "Edit(/.claude/agents/**)",
+      "Write(/.claude/agents/**)",
+      "Edit(/.claude/settings.json)",
+      "Write(/.claude/settings.json)"
     ]
   },
   "sandbox": {
     "enabled": true,
     "allowUnsandboxedCommands": false,
     "filesystem": {
-      "denyWrite": ["./factory/reviews"]
+      "denyWrite": [
+        "./factory/reviews",
+        "./.claude/hooks",
+        "./.claude/skills",
+        "./.claude/agents",
+        "./.claude/settings.json",
+        "./.claude/settings.local.json"
+      ]
     }
   },
   "hooks": {

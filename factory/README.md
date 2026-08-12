@@ -58,6 +58,18 @@ Check aus, alle ohne KI, ohne Netzwerk, rein regelbasiert:
 Künftige Checks würden ebenfalls von hier aus laufen, statt an mehreren Stellen eigene
 Prüflogik zu duplizieren.
 
+## Was ist der App-Test-Runner?
+
+[`factory/guards/run-app-tests.py`](guards/run-app-tests.py) ist der kanonische Einstiegspunkt für
+die eigentliche Anwendungs-Testsuite (`app/**/test_*.py`, aktuell 54 Tests). Er ist **bewusst
+nicht** in `run-factory-checks.py` eingehängt und läuft deshalb **nicht** über den lokalen
+Stop-Hook, sondern ausschließlich in GitHub CI (`.github/workflows/factory-ci.yml`, Schritt "Run
+application test suite"): Während `IMPLEMENTING` ist ein rotes Regressionstest-Ergebnis vor dem
+Fix ein normaler, gewollter Zwischenzustand (siehe Regression Test Plan eines Findings) -- würde
+der Stop-Hook bei jedem Sitzungsende alle App-Tests verlangen, würde er genau diesen gewollten
+Zwischenzustand blockieren. CI dagegen läuft erst bei Push/PR, also wenn eine Änderung als fertig
+gilt, und ist dafür der richtige Ort für "alle App-Tests müssen grün sein".
+
 ## Verification Skill und unabhängiger Reviewer
 
 Der Weg von `IMPLEMENTING` über `VERIFYING`, ein unabhängiges Review, `READY_FOR_CLOSURE` bis
@@ -146,9 +158,14 @@ Dieses Repo hat zwei getrennte Claude-Code-Einstellungsdateien mit bewusst unter
 Zweck:
 
 - **`.claude/settings.json`** ist die **übertragbare, versionierte Factory-Konfiguration**. Sie
-  gehört zur Vorlage selbst: der Stop-Hook und generische Demo-Schutzregeln (aktuell
-  `Bash(docker *)`, `Bash(git push *)`, `Bash(gh *)` verboten), die für jede Kopie dieses Repos
-  gleichermaßen sinnvoll sind. Diese Datei wird committet.
+  gehört zur Vorlage selbst: der Stop-Hook, generische Demo-Schutzregeln (aktuell
+  `Bash(docker *)` verboten) sowie explizite `Edit`/`Write`-Sperren auf `factory/reviews/`,
+  `.claude/hooks/`, `.claude/skills/`, `.claude/agents/` und die beiden Settings-Dateien selbst
+  (Verteidigung in der Tiefe zusätzlich zu den eingebauten Sandbox-Schutzregeln des Harness) --
+  Regeln, die für jede Kopie dieses Repos gleichermaßen sinnvoll sind. `git push` und `gh` sind
+  hier bewusst **nicht** pauschal verboten: ein normaler, bereits durch die Factory-Regeln
+  autorisierter Finding-Workflow (Fix -> Verifikation -> CI -> Review -> Closure -> PR/Merge) muss
+  unbeaufsichtigt laufen können, siehe `.claude/settings.local.json`. Diese Datei wird committet.
 - **`.claude/settings.local.json`** ist **persönlich/maschinenspezifisch** und **niemals Teil der
   Factory-Vorlage**. Hier stehen Regeln, die nur auf dem konkreten Rechner der jeweiligen Person
   Sinn ergeben — zum Beispiel absolute Pfade zu anderen, lokalen Projekten auf derselben
@@ -174,7 +191,11 @@ gemeinsamer Factory-Runner   factory/guards/run-factory-checks.py   (ruft alle d
         ↓
 Claude Stop-Hook             .claude/hooks/stop-validate-findings.py (ruft den Runner beim Stop-Versuch auf)
         ↓
-GitHub CI                    .github/workflows/factory-ci.yml        (ruft denselben Runner-Befehl in GitHub Actions auf)
+GitHub CI                    .github/workflows/factory-ci.yml        (ruft denselben Runner-Befehl
+                              PLUS zusaetzlich, nur hier, den App-Test-Runner auf:
+                              factory/guards/run-app-tests.py -- siehe "Was ist der
+                              App-Test-Runner?" oben fuer den Grund, warum dieser Schritt bewusst
+                              nicht ueber den Stop-Hook laeuft)
 ```
 
 Der Stop-Hook hilft **Claude**, lokal innerhalb einer laufenden Session korrekt zu arbeiten — er
