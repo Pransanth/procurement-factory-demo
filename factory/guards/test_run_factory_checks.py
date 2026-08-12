@@ -3,11 +3,15 @@
 Run with:
     python3 -m unittest factory.guards.test_run_factory_checks
 
-These tests point the real runner at temporary findings/jobs directories
-via --findings-dir / --jobs-dir, so the real factory/findings/P1-DEMO-1.md
-and the real app/jobs/ files are never touched. Tests that only exercise
-the finding-check dimension pass an empty --jobs-dir (and vice versa) so
-each test stays hermetic and isolated to the one check kind it is about.
+These tests point the real runner at temporary findings/jobs/reviews
+directories via --findings-dir / --jobs-dir / --reviews-dir, so the real
+factory/findings/P1-DEMO-1.md, the real app/jobs/ files and the real
+factory/reviews/ are never touched. Tests that only exercise one check
+dimension pass empty directories for the others so each test stays
+hermetic and isolated to the one check kind it is about. Review fixtures
+reference "Finding: P1-DEMO-1" -- that finding genuinely exists in this
+repo, so validate-review.py's existence cross-check passes; this is a
+read-only check, never a mutation of the real finding.
 """
 import subprocess
 import sys
@@ -83,14 +87,38 @@ def handle(conn, payload):
 register(JOB_TYPE, handle)
 """
 
+VALID_REVIEW = """\
+# P1-DEMO-1
+
+Finding: P1-DEMO-1
+Reviewer: finding-closure-reviewer subagent
+Reviewed Commit: abc123
+Result: PASS
+Root Cause Addressed: Ja.
+Regression Evidence Checked: Ja.
+Guard Evidence Checked: Ja.
+Scope Checked: Ja.
+Remaining Risks: Keine.
+Findings And Objections: Keine.
+"""
+
+BROKEN_REVIEW = """\
+# P1-DEMO-1
+
+Finding: P1-DEMO-1
+Result: PASS
+"""
+
 
 class RunFactoryChecksTests(unittest.TestCase):
     def setUp(self):
         self.tmp_dir = tempfile.mkdtemp(prefix="factory-runner-test-")
         self.findings_dir = Path(self.tmp_dir) / "findings"
         self.jobs_dir = Path(self.tmp_dir) / "jobs"
+        self.reviews_dir = Path(self.tmp_dir) / "reviews"
         self.findings_dir.mkdir()
         self.jobs_dir.mkdir()
+        self.reviews_dir.mkdir()
         self.addCleanup(self._cleanup)
 
     def _cleanup(self):
@@ -104,6 +132,9 @@ class RunFactoryChecksTests(unittest.TestCase):
     def write_job_file(self, name, content):
         (self.jobs_dir / name).write_text(content, encoding="utf-8")
 
+    def write_review(self, name, content):
+        (self.reviews_dir / name).write_text(content, encoding="utf-8")
+
     def run_runner(self):
         return subprocess.run(
             [
@@ -113,6 +144,8 @@ class RunFactoryChecksTests(unittest.TestCase):
                 str(self.findings_dir),
                 "--jobs-dir",
                 str(self.jobs_dir),
+                "--reviews-dir",
+                str(self.reviews_dir),
             ],
             capture_output=True,
             text=True,
@@ -185,6 +218,69 @@ class RunFactoryChecksTests(unittest.TestCase):
         combined = result.stdout + result.stderr
         self.assertIn("[FEHLER] finding-validator: broken.md", combined)
         self.assertIn("[FEHLER] job-handler-guard: bad_job.py", combined)
+
+    def test_valid_review_passes(self):
+        self.write_review("P1-DEMO-1.md", VALID_REVIEW)
+        result = self.run_runner()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("[OK]     review-guard: P1-DEMO-1.md", result.stdout)
+
+    def test_broken_review_fails(self):
+        self.write_review("P1-DEMO-1.md", BROKEN_REVIEW)
+        result = self.run_runner()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("[FEHLER] review-guard: P1-DEMO-1.md", result.stderr)
+        self.assertIn("FEHLGESCHLAGEN", result.stderr)
+
+    def test_readme_in_reviews_dir_is_not_checked(self):
+        # README.md documents the format; it is not a review artifact.
+        self.write_review("README.md", BROKEN_REVIEW)
+        result = self.run_runner()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("README.md", result.stdout + result.stderr)
+
+    def test_no_reviews_at_all_is_not_a_failure(self):
+        result = self.run_runner()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ALLE BESTANDEN", result.stdout)
+
+    def test_ready_for_closure_finding_with_matching_pass_review_passes_end_to_end(self):
+        # validate-review.py's "Finding" cross-check always resolves against
+        # the REAL factory/findings/ (it has no knowledge of this test's
+        # --findings-dir override), so this fixture deliberately keeps
+        # "Finding: P1-DEMO-1", which genuinely exists there -- the
+        # READY_FOR_CLOSURE finding under test is still the independent
+        # TEST-CLOSURE fixture in the temporary --findings-dir below.
+        review_path = self.reviews_dir / "TEST-CLOSURE.md"
+        review_path.write_text(VALID_REVIEW, encoding="utf-8")
+
+        finding = f"""\
+# TEST-CLOSURE
+
+Status: READY_FOR_CLOSURE
+
+## Befund
+
+Beispielbeschreibung.
+
+## Analyse
+
+Root Cause: Fehlende Pruefung der Organisation beim Erstellen neuer Jobs.
+Affected Components: Job-Scheduler, Job-Worker.
+Relevant Architecture: Hintergrundjobs laufen ohne zentralen Org-Filter.
+Recommended Repair: Zentralen Guard einfuehren, der die Org-ID erzwingt.
+Regression Test Plan: Neue Tests fuer Jobs mit falscher/fehlender Org-ID.
+Central Guard Plan: Guard-Funktion, die jeder Job-Registrierung vorgeschaltet wird.
+Expected Blast Radius: Nur neue Hintergrundjobs, keine bestehenden Endpunkte.
+Risk Assessment: Gering, da rein additive Pruefung ohne bestehendes Verhalten zu aendern.
+Verification Evidence: Alle relevanten Tests gruen.
+CI Evidence: GitHub Actions Run #123 auf main, gruen.
+Review Artifact: {review_path}
+"""
+        self.write_finding("TEST-CLOSURE.md", finding)
+        result = self.run_runner()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ALLE BESTANDEN", result.stdout)
 
 
 if __name__ == "__main__":

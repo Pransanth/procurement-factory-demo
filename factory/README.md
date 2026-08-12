@@ -34,11 +34,14 @@ python3 factory/guards/run-factory-checks.py
 ```
 
 Exit 0 = alle Checks bestanden, Exit 1 = mindestens einer fehlgeschlagen — mit einer klaren
-Auflistung, welcher Check bei welcher Datei fehlgeschlagen ist. Er führt aktuell zwei Arten von
-Check aus, beide ohne KI, ohne Netzwerk, rein regelbasiert:
+Auflistung, welcher Check bei welcher Datei fehlgeschlagen ist. Er führt aktuell drei Arten von
+Check aus, alle ohne KI, ohne Netzwerk, rein regelbasiert:
 
 1. **Finding-Validierung**: jede Datei unter `factory/findings/` gegen
-   [`validate-finding.py`](guards/validate-finding.py).
+   [`validate-finding.py`](guards/validate-finding.py). Für ein Finding, das `READY_FOR_CLOSURE`
+   oder `CLOSED` erreichen will, prüft dieser Schritt zusätzlich strukturell, dass das
+   referenzierte Review-Artefakt existiert und `Result: PASS` enthält (siehe "Verification Skill
+   und unabhängiger Reviewer" weiter unten).
 2. **Job-Handler-Scope-Guard**: jede Datei unter `app/jobs/` gegen
    [`validate-job-handler-scope.py`](guards/validate-job-handler-scope.py) — ein AST-basierter
    Guard, der prüft, dass ein Background-Job-Handler die in
@@ -47,9 +50,43 @@ Check aus, beide ohne KI, ohne Netzwerk, rein regelbasiert:
    `app.repositories.*`, einen wieder freigegebenen `organization_id`-/`conn`-Parameter, oder
    Zugriff auf `scope._conn`). Dieser Guard ist eine **zusätzliche** Schranke — die eigentliche
    Sicherheitsgrenze ist die Laufzeit-Architektur (`ScopedRepositories`), nicht dieser Guard.
+3. **Review-Guard**: jede Datei unter `factory/reviews/` (außer `README.md`) gegen
+   [`validate-review.py`](guards/validate-review.py) — prüft nur die Struktur eines
+   Review-Artefakts (alle Felder ausgefüllt, `Result` ein gültiger Wert), nicht dessen
+   inhaltliche Richtigkeit.
 
 Künftige Checks würden ebenfalls von hier aus laufen, statt an mehreren Stellen eigene
 Prüflogik zu duplizieren.
+
+## Verification Skill und unabhängiger Reviewer
+
+Der Weg von `IMPLEMENTING` über `VERIFYING`, ein unabhängiges Review, `READY_FOR_CLOSURE` bis
+`CLOSED` ist standardisiert und wiederverwendbar, nicht an einen einmaligen Chat-Prompt
+gebunden:
+
+- **[`.claude/skills/verify-finding/SKILL.md`](../.claude/skills/verify-finding/SKILL.md)**
+  beschreibt den Ablauf: Evidence einsammeln (Regressionstest, relevante Tests, Guard,
+  kanonischer Runner, externe CI), unabhängiges Review anstoßen, Review-Artefakt verfassen, je
+  nach Ergebnis weiter zu `READY_FOR_CLOSURE`/`CLOSED`, zu `EXPERT_REVIEW_REQUIRED`, oder
+  stoppen. Der Skill trifft selbst keine Sicherheitsentscheidung — er prüft vorhandene Evidence
+  systematisch und delegiert die eigentliche Bewertung an den Reviewer.
+- **[`.claude/agents/finding-closure-reviewer.md`](../.claude/agents/finding-closure-reviewer.md)**
+  ist ein eigenständiger, **rein lesender** Subagent (Tools: nur `Read`, `Grep`, `Glob` — kein
+  `Edit`, `Write`, `Bash`). Er läuft in einem getrennten Kontext ohne Erinnerung an die
+  implementierende Session und liefert genau eines: `PASS`, `FAIL` oder
+  `EXPERT_REVIEW_REQUIRED`, mit Begründung und Fundstellen. Der implementierende Agent darf
+  dieses Ergebnis nicht nachträglich überschreiben.
+- **[`factory/reviews/`](../factory/reviews/README.md)** ist der Ort für Review-Artefakte
+  (`factory/reviews/<Finding-ID>.md`), strukturell geprüft von `validate-review.py`.
+
+**Implementierender Agent vs. unabhängiger Reviewer:** Der implementierende Agent (der die
+Reparatur baut und den `verify-finding`-Skill ausführt) hat vollen Werkzeugzugriff, kennt die
+gesamte Implementierungshistorie und hat naturgemäß ein Interesse daran, dass sein eigener Fix
+funktioniert. Der Reviewer ist bewusst das Gegenteil: werkzeugbeschränkt (rein lesend), ohne
+Gedächtnis der Implementierung, ausschließlich mit dem beauftragt, kritisch zu prüfen, ob die
+Behauptungen tatsächlich stimmen. Diese Trennung ist der Grund, warum Closure-Gates (siehe
+`.claude/rules/factory-workflow.md`) ein `Result: PASS` aus einem echten, separaten Review
+verlangen, statt sich auf die Selbstauskunft des implementierenden Agenten zu verlassen.
 
 ## Was macht der Stop-Hook?
 
@@ -113,13 +150,15 @@ für jede Maschine neu und individuell einzurichten (oder wegzulassen).
 
 ## Die Prüfkette: lokal bis CI
 
-Es gibt vier Schichten, aber nur **eine** Prüflogik — jede Schicht ruft nur die davor auf,
-niemand implementiert die Regeln ein zweites Mal:
+Es gibt vier Schichten, aber nur **eine** Prüflogik pro Check-Art — jede Schicht ruft nur die
+davor auf, niemand implementiert die Regeln ein zweites Mal:
 
 ```
-lokaler Validator            factory/guards/validate-finding.py     (prueft 1 Finding)
+lokale Validatoren           factory/guards/validate-finding.py, validate-job-handler-scope.py,
+                              validate-review.py                    (pruefen je 1 Datei)
         ↓
-gemeinsamer Factory-Runner   factory/guards/run-factory-checks.py   (prueft alle Findings)
+gemeinsamer Factory-Runner   factory/guards/run-factory-checks.py   (ruft alle drei fuer alle
+                                                                      betroffenen Dateien auf)
         ↓
 Claude Stop-Hook             .claude/hooks/stop-validate-findings.py (ruft den Runner beim Stop-Versuch auf)
         ↓

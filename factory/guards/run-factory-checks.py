@@ -6,13 +6,22 @@ passes the factory's automated checks. Everything else -- the local Stop
 hook, GitHub CI -- is expected to call this script rather than
 re-implement its own checking logic.
 
-There are two kinds of check, run in order:
+There are three kinds of check, run in order:
   1. Every finding under factory/findings/ must pass
-     factory/guards/validate-finding.py.
+     factory/guards/validate-finding.py. For a finding trying to reach
+     READY_FOR_CLOSURE/CLOSED, this already includes checking that its
+     referenced review artifact exists and says "Result: PASS" -- see that
+     script's docstring.
   2. Every file under app/jobs/ must pass
      factory/guards/validate-job-handler-scope.py (a file that is not a
      job handler passes trivially -- see that script's docstring for what
      counts as a handler).
+  3. Every review artifact under factory/reviews/ must pass
+     factory/guards/validate-review.py -- structural completeness only
+     (are all required fields filled in, is Result a valid value). Whether
+     a review's content is actually correct is not something a
+     deterministic script can judge; that is the independent reviewer's
+     job (.claude/agents/finding-closure-reviewer.md).
 More kinds can be added later; they would all be run from here, in one
 place, so no caller ever has to duplicate checking logic.
 
@@ -20,7 +29,7 @@ No LLM calls, no network access, no external services -- everything here is
 plain, deterministic Python standard library.
 
 Usage:
-    python3 factory/guards/run-factory-checks.py [--findings-dir PATH] [--jobs-dir PATH]
+    python3 factory/guards/run-factory-checks.py [--findings-dir PATH] [--jobs-dir PATH] [--reviews-dir PATH]
 
 Exit code 0: every check passed (including the trivial case of nothing to
              check).
@@ -35,8 +44,10 @@ from pathlib import Path
 THIS_DIR = Path(__file__).resolve().parent
 VALIDATOR = THIS_DIR / "validate-finding.py"
 JOB_HANDLER_GUARD = THIS_DIR / "validate-job-handler-scope.py"
+REVIEW_GUARD = THIS_DIR / "validate-review.py"
 DEFAULT_FINDINGS_DIR = THIS_DIR.parent / "findings"
 DEFAULT_JOBS_DIR = THIS_DIR.parent.parent / "app" / "jobs"
+DEFAULT_REVIEWS_DIR = THIS_DIR.parent / "reviews"
 
 
 def run_finding_checks(findings_dir):
@@ -123,6 +134,48 @@ def run_job_handler_checks(jobs_dir):
     return ok, report
 
 
+def run_review_checks(reviews_dir):
+    """Run the review-artifact guard against every review file in reviews_dir
+    (README.md is excluded -- it documents the format, it is not a review
+    artifact itself).
+
+    Returns (ok: bool, report_lines: list[str]).
+    """
+    report = []
+
+    if not REVIEW_GUARD.is_file():
+        report.append(f"[FEHLER] Review-Guard nicht gefunden: {REVIEW_GUARD}")
+        return False, report
+
+    if not reviews_dir.is_dir():
+        report.append(f"Kein Reviews-Verzeichnis unter {reviews_dir} -- nichts zu pruefen.")
+        return True, report
+
+    candidate_files = sorted(p for p in reviews_dir.glob("*.md") if p.name != "README.md")
+    if not candidate_files:
+        report.append(f"Keine Review-Artefakte unter {reviews_dir} -- nichts zu pruefen.")
+        return True, report
+
+    ok = True
+    for candidate_file in candidate_files:
+        result = subprocess.run(
+            [sys.executable, str(REVIEW_GUARD), str(candidate_file)],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            report.append(f"[OK]     review-guard: {candidate_file.name}")
+        else:
+            ok = False
+            report.append(f"[FEHLER] review-guard: {candidate_file.name}")
+            for stream in (result.stdout, result.stderr):
+                for line in stream.splitlines():
+                    if line.strip():
+                        report.append(f"           {line}")
+
+    return ok, report
+
+
 def main(argv):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -137,13 +190,20 @@ def main(argv):
         default=DEFAULT_JOBS_DIR,
         help="Verzeichnis mit Background-Job-Dateien (Standard: app/jobs)",
     )
+    parser.add_argument(
+        "--reviews-dir",
+        type=Path,
+        default=DEFAULT_REVIEWS_DIR,
+        help="Verzeichnis mit Review-Artefakten (Standard: factory/reviews)",
+    )
     args = parser.parse_args(argv[1:])
 
     finding_ok, finding_report = run_finding_checks(args.findings_dir)
     jobs_ok, jobs_report = run_job_handler_checks(args.jobs_dir)
+    reviews_ok, reviews_report = run_review_checks(args.reviews_dir)
 
-    ok = finding_ok and jobs_ok
-    report = finding_report + jobs_report
+    ok = finding_ok and jobs_ok and reviews_ok
+    report = finding_report + jobs_report + reviews_report
 
     stream = sys.stdout if ok else sys.stderr
     for line in report:
