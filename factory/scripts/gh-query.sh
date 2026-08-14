@@ -35,13 +35,14 @@
 #   factory/scripts/gh-query.sh branch-rules <BRANCH>
 #   factory/scripts/gh-query.sh required-checks <BRANCH>
 #   factory/scripts/gh-query.sh merge <PR_NUMBER> <MERGE_METHOD>
+#   factory/scripts/gh-query.sh pr-create <TITLE> <HEAD_BRANCH> <BASE_BRANCH> <BODY>
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GH_API="$SCRIPT_DIR/gh-api.sh"
 
 if [ "$#" -lt 1 ]; then
-  echo "usage: gh-query.sh {repo|default-branch|pr|pr-summary|check-runs|check-runs-summary|actions-run|actions-run-summary|actions-jobs|actions-jobs-summary|branch-rules|required-checks|merge} [arg...]" >&2
+  echo "usage: gh-query.sh {repo|default-branch|pr|pr-summary|pr-create|check-runs|check-runs-summary|actions-run|actions-run-summary|actions-jobs|actions-jobs-summary|branch-rules|required-checks|merge} [arg...]" >&2
   exit 2
 fi
 
@@ -164,6 +165,30 @@ data = json.load(sys.stdin)
 print("merged:", data.get("merged"))
 print("sha:", data.get("sha"))
 print("message:", data.get("message"))
+'
+    ;;
+  pr-create)
+    PR_TITLE="${2:-}"
+    PR_HEAD="${3:-}"
+    PR_BASE="${4:-}"
+    PR_BODY="${5:-}"
+    if [ -z "$PR_TITLE" ] || [ -z "$PR_HEAD" ] || [ -z "$PR_BASE" ]; then
+      echo "usage: gh-query.sh pr-create <TITLE> <HEAD_BRANCH> <BASE_BRANCH> <BODY>" >&2
+      exit 2
+    fi
+    PR_PAYLOAD="$(python3 -c '
+import json, sys
+title, head, base, body = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4] if len(sys.argv) > 4 else ""
+print(json.dumps({"title": title, "head": head, "base": base, "body": body}))
+' "$PR_TITLE" "$PR_HEAD" "$PR_BASE" "$PR_BODY")"
+    "$GH_API" POST /pulls "$PR_PAYLOAD" 2>/dev/null | python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+print("number:", data.get("number"))
+print("html_url:", data.get("html_url"))
+print("state:", data.get("state"))
+head = data.get("head") or {}
+print("head_sha:", head.get("sha"))
 '
     ;;
   *)
