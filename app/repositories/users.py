@@ -50,3 +50,14 @@ def list_for_org(conn, organization_id):
         "SELECT * FROM users WHERE organization_id = ? ORDER BY id", (organization_id,)
     ).fetchall()
     return [_row_to_user(row) for row in rows]
+
+
+def update_role(conn, organization_id, user_id, role):
+    """Set a user's role. Returns the updated User, or None if the id does
+    not belong to this organization (nothing is written in that case)."""
+    conn.execute(
+        "UPDATE users SET role = ? WHERE organization_id = ? AND id = ?",
+        (role, organization_id, user_id),
+    )
+    conn.commit()
+    return get_by_id(conn, organization_id, user_id)

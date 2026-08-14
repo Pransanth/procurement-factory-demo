@@ -13,6 +13,11 @@ Layer.
   `organization_id` und filtert konsequent darauf.
 - `services/procurement_service.py` — orchestriert Repositories für mehrstufige Abläufe
   (erstellen → einreichen → entscheiden) inklusive Audit-Log-Einträgen.
+- `services/user_admin_service.py` — Benutzerverwaltung innerhalb einer Organisation
+  (Rollenwechsel), inklusive Audit-Log-Eintrag.
+- `services/reporting_service.py` — rein lesende Auswertungen (Monatsbericht über genehmigte
+  Beschaffungen). Formuliert seine Abfragen selbst, weil die Repository-Schicht bewusst keine
+  Aggregation (`COUNT`, `SUM`, `ORDER BY ... LIMIT`, Joins) anbietet.
 - `jobs/` — Background-Job-Subsystem: `queue.py` (Queue), `handlers.py` (Registry
   `job_type -> Funktion`), sowie zwei konkrete Jobs (`approval_reminder.py`,
   `audit_log_archival.py`). Jeder Handler liest `organization_id` aus seinem eigenen Payload —
@@ -30,6 +35,8 @@ python3 -m unittest \
   app.repositories.test_approvals \
   app.repositories.test_audit_log \
   app.services.test_procurement_service \
+  app.services.test_user_admin_service \
+  app.services.test_reporting_service \
   app.jobs.test_queue \
   app.jobs.test_approval_reminder \
   app.jobs.test_audit_log_archival \
@@ -44,3 +51,7 @@ python3 -m unittest \
   ist bewusst offen gelassen und Gegenstand von `factory/findings/P1-DEMO-1.md`.
 - Keine adversariale Regressionstests für P1-DEMO-1 (z. B. ein Job mit falscher
   `organization_id`) — das ist für nach der Analyse dieses Findings reserviert.
+- Ebenso keine adversarialen Regressionstests für `factory/findings/P1-DEMO-4.md` und
+  `factory/findings/P1-DEMO-5.md`. `services/test_reporting_service.py` und
+  `services/test_user_admin_service.py` sind Baseline-Tests des jeweils normalen Ablaufs; die
+  Gegenprobe ist für nach der Analyse dieser Findings reserviert.

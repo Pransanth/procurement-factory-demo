@@ -39,6 +39,16 @@ class TestUsersRepository(unittest.TestCase):
         with self.assertRaises(Exception):
             users.create(self.conn, self.org_a.id, "x@a.example", "X", "superuser")
 
+    def test_update_role(self):
+        user = users.create(self.conn, self.org_a.id, "alice@a.example", "Alice", "member")
+        updated = users.update_role(self.conn, self.org_a.id, user.id, "approver")
+        self.assertEqual(updated.role, "approver")
+
+    def test_update_role_wrong_org_writes_nothing(self):
+        user = users.create(self.conn, self.org_a.id, "alice@a.example", "Alice", "member")
+        self.assertIsNone(users.update_role(self.conn, self.org_b.id, user.id, "admin"))
+        self.assertEqual(users.get_by_id(self.conn, self.org_a.id, user.id).role, "member")
+
 
 if __name__ == "__main__":
     unittest.main()
