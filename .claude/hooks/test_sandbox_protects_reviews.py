@@ -104,15 +104,51 @@ class SandboxProtectsReviewsTests(unittest.TestCase):
             if probe_path.exists():
                 probe_path.unlink()
 
-    def test_p1_demo_1_untouched(self):
-        """Guard-rail for this whole exercise: no test in this file (or the
-        sandbox config it exercises) may have created a real review artifact
-        or advanced P1-DEMO-1's status."""
-        self.assertFalse((REPO_ROOT / "factory" / "reviews" / "P1-DEMO-1.md").exists())
+    def test_p1_demo_1_review_artifact_is_protected_from_modification(self):
+        """P1-DEMO-1 is CLOSED and its real review artifact was intentionally
+        committed (see commit e528599). This test no longer guards against
+        the artifact existing -- it guards against a normal agent silently
+        overwriting it."""
+        review_path = REPO_ROOT / "factory" / "reviews" / "P1-DEMO-1.md"
+        original_text = review_path.read_text(encoding="utf-8")
+        self.assertIn("Result: PASS", original_text)
+
+        write_script = (
+            "from pathlib import Path; "
+            f"Path({str(review_path)!r}).write_text('overwritten by sandbox test', encoding='utf-8')"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", write_script],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+
+        try:
+            if result.returncode == 0 and review_path.read_text(encoding="utf-8") != original_text:
+                self.skipTest(
+                    "Overwrite of factory/reviews/P1-DEMO-1.md succeeded -- this "
+                    "process is not running under an active Claude Code OS sandbox "
+                    "(expected when run outside a sandboxed Claude Code Bash "
+                    "session, e.g. in plain CI)."
+                )
+
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+            self.assertEqual(review_path.read_text(encoding="utf-8"), original_text)
+            self.assertTrue(
+                "PermissionError" in result.stderr
+                or "Operation not permitted" in result.stderr
+                or "Permission denied" in result.stderr,
+                f"expected a permission-style failure, got:\n{result.stderr}",
+            )
+        finally:
+            if review_path.read_text(encoding="utf-8") != original_text:
+                review_path.write_text(original_text, encoding="utf-8")
+
         finding_text = (REPO_ROOT / "factory" / "findings" / "P1-DEMO-1.md").read_text(
             encoding="utf-8"
         )
-        self.assertIn("Status: IMPLEMENTING", finding_text)
+        self.assertIn("Status: CLOSED", finding_text)
 
 
 if __name__ == "__main__":
