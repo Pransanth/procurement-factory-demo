@@ -235,3 +235,48 @@ python3 factory/guards/run-factory-checks.py
 
 Weil sich Guard-Docstring und Tests gegenüber dem reviewten Commit geändert haben, wird eine
 **zweite, vollständige Review-Runde** gegen den neuen Commit durchgeführt.
+
+## Nacharbeit aus Review-Runde 2 (Ergebnis: FAIL)
+
+Review-Runde 2 (Reviewed Commit `36b2362`) endete mit **`Result: FAIL`** — zu Recht, und der
+Fehlschlag steht hier bewusst im Protokoll, statt weggeschrieben zu werden.
+
+**Der Befund des Reviewers:** Im Feld `Verification Evidence` des Findings stand, als Teil eines
+ausdrücklich als "Am 2026-08-14 ... frisch ausgefuehrt" beschriebenen Laufs, die Zahl
+"die sechs Guard-Testmodule zusammen -- 68 Tests OK". Diese Zahl stammte aus Runde 1 und wurde bei
+der Nacharbeit nicht neu gemessen: durch die zwei neuen Known-Limitation-Fixtures hat
+`test_validate_service_role_authorization` seither 12 statt 10 Fälle — dieselbe Satzhälfte des
+Feldes sagte das sogar korrekt. Der Wert widersprach sich also innerhalb eines Satzes und war eine
+fortgeschriebene statt einer gemessenen Angabe, ausgerechnet in dem Feld, das konkret benennen
+soll, welche Tests tatsächlich grün liefen.
+
+**Reaktion:** die sechs Module wurden neu ausgeführt und der reale Wert eingetragen — kein
+Nachrechnen, kein Schätzen:
+
+```
+python3 -m unittest factory.guards.test_validate_finding factory.guards.test_validate_job_handler_scope factory.guards.test_validate_review factory.guards.test_create_finding_worktree factory.guards.test_validate_service_sql_org_scope factory.guards.test_validate_service_role_authorization
+# Ran 70 tests -> OK   (14 + 7 + 9 + 6 + 22 + 12)
+```
+
+Zur Kontrolle wurden bei derselben Gelegenheit auch die übrigen im Feld genannten Zahlen neu
+gemessen; sie stimmten unverändert:
+
+```
+python3 -m unittest factory.guards.test_run_factory_checks
+# Ran 23 tests -> OK
+
+python3 -m unittest app.services.test_user_admin_service app.repositories.test_users app.test_multi_tenant_isolation
+# Ran 19 tests -> OK
+
+python3 .claude/hooks/test_subagentstop_write_review.py
+# Ran 13 tests -> OK
+```
+
+Die beiden weiteren Punkte des Reviewers waren zum Zeitpunkt seiner Lektüre noch offen und sind
+Teil des regulären Ablaufs: `CI Evidence` nennt inzwischen zusätzlich den grünen Lauf für den
+reviewten Commit `36b2362` (Actions-Run `31811982062`), und das Feld `Review Artifact` wird — wie
+im Workflow vorgesehen — erst mit dem Closure-Commit gesetzt, nachdem eine Review-Runde mit
+`PASS` vorliegt.
+
+Es folgt eine **dritte, vollständige Review-Runde**. Der `FAIL` aus Runde 2 wird nicht
+überschrieben oder umgedeutet: er bleibt als Grund dokumentiert, warum es diese Runde gibt.
