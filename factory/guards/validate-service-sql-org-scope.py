@@ -60,6 +60,18 @@ factory/guards/validate-job-handler-scope.py):
       tables are seen only through the same FROM/JOIN scan as the outer
       query, so a tenant table referenced exclusively inside a construct
       this scan does not reach is not checked.
+    - Predicates are matched against the whole literal, not per statement
+      and not per boolean branch. In a multi-statement literal (as passed
+      to executescript) a predicate in one statement satisfies a table
+      referenced in another, and a predicate sitting under OR or NOT
+      counts as present. Whether the right-hand "<other>.organization_id"
+      really belongs to a table the statement references is not verified
+      either -- a typo'd qualifier satisfies the check here and fails at
+      SQL runtime instead.
+    - Statements starting with REPLACE INTO are not treated as inserts;
+      they fall into the read/update path, where the target table needs an
+      organization_id predicate it usually will not have. That direction
+      fails closed (a false alarm, not a miss) and is left as is.
 It is a second layer over the actual boundary (the predicate in the
 query), never a substitute for it.
 
@@ -132,12 +144,20 @@ FROM_LIST_ENTRY_RE = re.compile(
     re.IGNORECASE,
 )
 
+# SQLite spells conflict handling as "INSERT OR REPLACE INTO", "INSERT OR
+# IGNORE INTO" etc. Those are still inserts into the target table, so the
+# column-list rule below has to see them; matching only "INSERT INTO" would
+# let them through unchecked.
+INSERT_CONFLICT_CLAUSE = r"(?:or\s+(?:replace|ignore|abort|fail|rollback)\s+)?"
+
 INSERT_TARGET_RE = re.compile(
-    r"\binsert\s+into\s+([A-Za-z_][A-Za-z0-9_]*)\s*(\()?", re.IGNORECASE
+    r"\binsert\s+" + INSERT_CONFLICT_CLAUSE + r"into\s+([A-Za-z_][A-Za-z0-9_]*)\s*(\()?",
+    re.IGNORECASE,
 )
 
 INSERT_COLUMNS_RE = re.compile(
-    r"\binsert\s+into\s+[A-Za-z_][A-Za-z0-9_]*\s*\(([^)]*)\)", re.IGNORECASE
+    r"\binsert\s+" + INSERT_CONFLICT_CLAUSE + r"into\s+[A-Za-z_][A-Za-z0-9_]*\s*\(([^)]*)\)",
+    re.IGNORECASE,
 )
 
 # Right-hand side of an accepted organization_id predicate: a positional

@@ -239,3 +239,42 @@ python3 .claude/hooks/test_stop_validate_findings.py
 Weil sich der Guard-Code dadurch gegenüber dem reviewten Commit geändert hat, wird eine
 **zweite, vollständige Review-Runde** gegen den neuen Commit durchgeführt — das Ergebnis von
 Runde 1 wird nicht auf den geänderten Stand übertragen.
+
+## Nacharbeit aus Review-Runde 2
+
+Review-Runde 2 (Reviewed Commit `e078606`) endete ebenfalls mit `Result: PASS` und bestätigte,
+dass die drei Lücken aus Runde 1 tatsächlich geschlossen sind. Sie fand dabei **eine** verbliebene
+Stelle, an der der Guard nach außen aufmacht statt zu:
+
+`INSERT_TARGET_RE` verlangte wörtlich `insert into`, während die Insert-Erkennung in
+`check_statement()` jedes mit `insert` beginnende Statement erfasst. Ein
+`INSERT OR REPLACE INTO suppliers VALUES (...)` bzw. `INSERT OR IGNORE INTO ...` — in SQLite die
+übliche Upsert-Schreibweise — fand damit kein Ziel, enthielt kein `SELECT` und wurde ohne jede
+Prüfung akzeptiert. Das ist behoben: beide Regexe akzeptieren jetzt die Konflikt-Klausel
+(`or replace|ignore|abort|fail|rollback`), festgehalten durch drei neue Testfälle
+(`test_insert_or_replace_without_column_list_is_rejected`,
+`test_insert_or_ignore_without_organization_id_column_is_rejected`,
+`test_insert_or_replace_with_organization_id_column_is_accepted`).
+
+Die übrigen von Runde 2 genannten Punkte sind **keine** Fehler, sondern echte Grenzen dieses
+Guard-Typs; sie stehen deshalb jetzt ausdrücklich in seinem Docstring, statt implizit
+wegzufallen: Prädikate werden gegen das gesamte Literal gematcht (bei mehreren Statements in einem
+`executescript`-Literal bzw. unter `OR`/`NOT` zählt ein Prädikat als vorhanden), die rechte Seite
+`<other>.organization_id` wird nicht gegen die tatsächlich referenzierten Tabellen geprüft, und
+`REPLACE INTO ...` (ohne `INSERT`) landet im Lesepfad und schlägt dort eher zu viel als zu wenig
+Alarm. Ebenfalls unverändert und bewusst: der Guard prüft die *Anwesenheit* eines Prädikats, nie
+den gebundenen Wert — die eigentliche Grenze bleibt die Abfrage selbst.
+
+```
+python3 -m unittest factory.guards.test_validate_service_sql_org_scope -v
+# 22 tests -> OK (19 aus Runde 2 + 3 neue)
+
+python3 factory/guards/run-app-tests.py
+# 72 tests -> OK
+
+python3 factory/guards/run-factory-checks.py
+# Factory-Checks: ALLE BESTANDEN
+```
+
+Auch dieser Stand wird erneut unabhängig reviewt (Runde 3), weil sich der Guard-Code seit Runde 2
+wieder geändert hat.

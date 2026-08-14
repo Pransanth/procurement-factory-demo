@@ -150,6 +150,31 @@ def add_organization(conn, name):
     return conn.execute("INSERT INTO organizations VALUES (?, ?)", (name, "2026-03-01"))
 '''
 
+INSERT_OR_REPLACE_WITHOUT_COLUMN_LIST = '''\
+def upsert_supplier(conn, organization_id, name):
+    return conn.execute(
+        "INSERT OR REPLACE INTO suppliers VALUES (?, ?, ?)",
+        (organization_id, name, "2026-03-01T00:00:00+00:00"),
+    )
+'''
+
+INSERT_OR_IGNORE_WITHOUT_ORG_COLUMN = '''\
+def upsert_supplier(conn, name):
+    return conn.execute(
+        "INSERT OR IGNORE INTO suppliers (name, created_at) VALUES (?, ?)",
+        (name, "2026-03-01T00:00:00+00:00"),
+    )
+'''
+
+INSERT_OR_REPLACE_WITH_ORG_COLUMN = '''\
+def upsert_supplier(conn, organization_id, name):
+    return conn.execute(
+        "INSERT OR REPLACE INTO suppliers (organization_id, name, created_at) "
+        "VALUES (?, ?, ?)",
+        (organization_id, name, "2026-03-01T00:00:00+00:00"),
+    )
+'''
+
 INSERT_SELECT_UNSCOPED_SOURCE = '''\
 def archive(conn, organization_id, threshold):
     return conn.execute(
@@ -274,6 +299,22 @@ class ValidateServiceSqlOrgScopeTests(unittest.TestCase):
 
     def test_insert_into_non_tenant_table_needs_no_column_list(self):
         result = self.run_guard(INSERT_INTO_NON_TENANT_TABLE)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_insert_or_replace_without_column_list_is_rejected(self):
+        # SQLite's conflict-handling spellings are still inserts into the
+        # target table and must not slip past the column-list rule.
+        result = self.run_guard(INSERT_OR_REPLACE_WITHOUT_COLUMN_LIST)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Spaltenliste", result.stderr)
+
+    def test_insert_or_ignore_without_organization_id_column_is_rejected(self):
+        result = self.run_guard(INSERT_OR_IGNORE_WITHOUT_ORG_COLUMN)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("organization_id", result.stderr)
+
+    def test_insert_or_replace_with_organization_id_column_is_accepted(self):
+        result = self.run_guard(INSERT_OR_REPLACE_WITH_ORG_COLUMN)
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_insert_select_from_unscoped_source_is_rejected(self):
