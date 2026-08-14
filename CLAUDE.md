@@ -114,6 +114,24 @@ freigibt. Beides ist durch
 deterministisch abgesichert — inklusive des Falls, dass ein stale lokaler Branch bzw. ein
 verwaister Remote-HEAD existiert und `.git/config` nicht schreibbar ist.
 
+### Erwartete Sandbox-Meldungen, die **kein** `AUTONOMY_BLOCKER` sind
+
+Zwei Meldungen erscheinen im Normalbetrieb, obwohl der Befehl erfolgreich ist. Beide sind Folge
+derselben gewollten Sandbox-Grenzen und **kein** Grund, einen Lauf abzubrechen — maßgeblich ist
+der Exit-Code und die tatsächliche Wirkung, nicht die Textausgabe:
+
+- `fatal: failed to store: ...` bei `git fetch origin` und `git push origin <branch>`: der
+  Credential-Helper darf den System-Schlüsselbund nicht beschreiben. Fetch und Push selbst laufen
+  durch (Exit 0, Refs werden korrekt aktualisiert) — nachprüfbar mit `git rev-parse origin/main`.
+- `error: could not lock config file .git/config` zusammen mit `warning: update of config-file
+  failed` beim **Löschen** eines Branches (`git branch -d` / `-D`): Git will den zugehörigen
+  Config-Abschnitt mit entfernen und darf nicht. Der Branch wird trotzdem gelöscht
+  (`Deleted branch ...`).
+
+Der Unterschied zur Branch-**Erzeugung** oben ist wesentlich und der Grund, warum `--no-track`
+dort zwingend ist: derselbe verweigerte Schreibzugriff lässt die Erzeugung **hart fehlschlagen**,
+während er beim Löschen nur eine Warnung ist.
+
 ## Mehrere Findings gleichzeitig: Worktree statt Branch-Wechsel im selben Verzeichnis
 
 `.claude/hooks/`, `.claude/skills/`, `.claude/agents/`, `.claude/settings.json` und
