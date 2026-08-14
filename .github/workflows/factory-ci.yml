@@ -35,7 +35,7 @@ jobs:
         run: python3 factory/guards/run-app-tests.py
 
       - name: Run factory guard tests
-        run: python3 -m unittest factory.guards.test_validate_finding factory.guards.test_run_factory_checks factory.guards.test_validate_job_handler_scope factory.guards.test_validate_review -v
+        run: python3 -m unittest factory.guards.test_validate_finding factory.guards.test_run_factory_checks factory.guards.test_validate_job_handler_scope factory.guards.test_validate_review factory.guards.test_create_finding_worktree -v
 
       - name: Run Stop hook tests
         run: python3 .claude/hooks/test_stop_validate_findings.py -v

@@ -63,6 +63,33 @@ Wechsel dort nicht vollständig schreiben und bricht in einem inkonsistenten Zwi
 Da diese Pfade jetzt für jeden künftigen Commit ausnahmslos gesperrt sind, können normale,
 künftige Finding-Branches darin gar nicht mehr voneinander abweichen — reines Hin- und
 Herwechseln ist damit wieder unbedenklich. Für **echt gleichzeitige** Arbeit an mehreren Findings
-(z. B. zwei P1 im selben Lauf) trotzdem bevorzugt **EnterWorktree** pro Finding-Branch verwenden,
-statt im Hauptverzeichnis zwischen Branches zu wechseln — das hält beide Findings sauber getrennt
-und vermeidet jede Abhängigkeit von der obigen Analyse.
+(z. B. zwei P1 im selben Lauf) trotzdem bevorzugt einen eigenen Worktree pro Finding-Branch
+verwenden, statt im Hauptverzeichnis zwischen Branches zu wechseln — das hält beide Findings
+sauber getrennt und vermeidet jede Abhängigkeit von der obigen Analyse.
+
+**Worktree-Basis: immer explizit `origin/main`, nie EnterWorktrees impliziten "fresh"-Default.**
+EnterWorktrees `fresh`-Basis-Modus (harness-seitiger Default) löst "den Default-Branch" über den
+lokal gecachten Symref `refs/remotes/origin/HEAD` auf. `git fetch origin` aktualisiert diesen
+Symref **nicht** — nur ein expliziter `git remote set-head` tut das. Ist er verwaist (real
+beobachtet: er zeigte auf einen alten, bereits gemergten Feature-Branch statt auf
+`refs/remotes/origin/main`), entsteht ein neuer Finding-Worktree still von einem veralteten
+Commit statt vom aktuellen `origin/main`-Stand. EnterWorktree selbst bietet keinen Parameter für
+einen expliziten Basis-Ref/SHA.
+
+Deshalb für jeden Finding-Worktree zwingend zweistufig über
+[`factory/scripts/create-finding-worktree.sh`](factory/scripts/create-finding-worktree.sh) gehen,
+statt `EnterWorktree` direkt einen neuen Worktree anlegen zu lassen:
+
+```
+SHA="$(factory/scripts/create-finding-worktree.sh resolve)"
+factory/scripts/create-finding-worktree.sh create "$SHA" .claude/worktrees/<name> <branch>
+```
+
+Das Skript fetcht `origin`, bestimmt den erwarteten Basis-SHA explizit aus `origin/main`, legt den
+Worktree direkt von diesem Ref an und vergleicht unmittelbar danach — vor jeder weiteren
+Schreiboperation — den tatsächlichen Worktree-HEAD gegen den erwarteten SHA. Bei Abweichung wird
+der Worktree sofort verworfen, `AUTONOMY_BLOCKER: ...` ausgegeben und nicht weitergearbeitet. Erst
+nach einem erfolgreichen `create` (Exit 0, `WORKTREE_READY ...`) den Worktree über
+`EnterWorktree` mit `path: .claude/worktrees/<name>` betreten, um die Session dorthin zu
+wechseln — niemals über `EnterWorktree`s `name`-Parameter, der wieder den impliziten,
+symref-abhängigen `fresh`-Default verwenden würde.
