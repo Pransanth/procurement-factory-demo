@@ -157,13 +157,14 @@ python3 factory/guards/validate-service-sql-org-scope.py app/services/procuremen
 # ÜBERSPRUNGEN: app/services/procurement_service.py (kein rohes SQL in dieser Datei)
 
 python3 -m unittest factory.guards.test_validate_service_sql_org_scope -v
-# 12 tests -> OK, darunter test_unfixed_reporting_query_is_rejected (die Abfrage im Zustand VOR
+# 19 tests -> OK, darunter test_unfixed_reporting_query_is_rejected (die Abfrage im Zustand VOR
 # dem Fix wird zurückgewiesen) und test_fixed_reporting_query_is_accepted (die Abfrage NACH dem
 # Fix wird akzeptiert)
 
 python3 -m unittest factory.guards.test_run_factory_checks -v
-# 19 tests -> OK (15 bestehende + 4 neue: scoped/unscoped/ohne-SQL/test_*-ausgenommen; diese
-# Datei läuft in GitHub CI, damit die neue Regel dort real mitgeprüft wird)
+# 19 tests -> OK (14 bestehende + 5 neue: scoped/unscoped/ohne-SQL/test_*-ausgenommen/
+# Finding-und-Service-Fehler-gemeinsam; diese Datei läuft in GitHub CI, damit die neue Regel
+# dort real mitgeprüft wird)
 
 python3 factory/guards/run-factory-checks.py
 # Factory-Checks: ALLE BESTANDEN (inkl. [OK] service-sql-guard: reporting_service.py)
@@ -189,3 +190,52 @@ python3 -m unittest factory.guards.test_validate_finding factory.guards.test_val
 python3 .claude/hooks/test_subagentstop_write_review.py
 # 13 tests -> OK
 ```
+
+## Nacharbeit aus Review-Runde 1
+
+Die erste unabhängige Review (`finding-closure-reviewer`, Reviewed Commit
+`c1ab345a09f0002f38713a86d75c6fd45bcec6ec`) endete mit `Result: PASS`, hielt aber zwei konkrete
+Einwände fest. Beide wurden behoben, bevor das Finding weitergeführt wurde — nicht weggeschrieben:
+
+1. **Guard-Dokumentation war breiter als die Implementierung.** Der Guard beanspruchte, Tabellen
+   aus `FROM`/`JOIN`/`UPDATE`/`INSERT INTO`/`DELETE FROM` zu erfassen, übersah aber
+   komma-separierte `FROM`-Listen (`FROM a x, b y` — nur die erste Tabelle wurde geprüft),
+   überging bei `INSERT ... SELECT` die Quelltabellen vollständig und akzeptierte ein
+   `INSERT INTO <tenant-table> VALUES (...)` ohne Spaltenliste stillschweigend. Genau diese drei
+   Lücken hätten den Befund dieses Findings in leicht anderer Schreibweise erneut durchgelassen.
+   Die Implementierung wurde entsprechend erweitert (Komma-Listen, `INSERT ... SELECT`-Quellen,
+   fehlende Spaltenliste als Fehler), und die verbleibenden echten Grenzen (Subqueries/CTEs, kein
+   Prüfen des *gebundenen Werts*, kein dynamisches SQL) stehen jetzt ausdrücklich im Docstring.
+   Sieben neue Testfälle halten das fest: `test_comma_separated_from_list_without_predicates_is_rejected`,
+   `test_comma_separated_from_list_scoping_only_the_first_table_is_rejected`,
+   `test_fully_scoped_comma_separated_from_list_is_accepted`,
+   `test_insert_into_tenant_table_without_column_list_is_rejected`,
+   `test_insert_into_non_tenant_table_needs_no_column_list`,
+   `test_insert_select_from_unscoped_source_is_rejected`,
+   `test_insert_select_from_scoped_source_is_accepted`.
+2. **Zählfehler in dieser Datei.** `factory/guards/test_run_factory_checks.py` enthält 14
+   bestehende plus 5 neue Fälle, nicht "15 bestehende + 4 neue"; die Gesamtzahl 19 stimmte. Der
+   Text oben ist korrigiert. Kein bestehender Fall wurde gelöscht oder abgeschwächt.
+
+Danach erneut ausgeführt:
+
+```
+python3 -m unittest factory.guards.test_validate_service_sql_org_scope -v
+# 19 tests -> OK (12 aus Runde 1 + 7 neue)
+
+python3 -m unittest factory.guards.test_run_factory_checks -v
+# 19 tests -> OK
+
+python3 factory/guards/run-app-tests.py
+# 72 tests -> OK
+
+python3 factory/guards/run-factory-checks.py
+# Factory-Checks: ALLE BESTANDEN
+
+python3 .claude/hooks/test_stop_validate_findings.py
+# 5 tests -> OK
+```
+
+Weil sich der Guard-Code dadurch gegenüber dem reviewten Commit geändert hat, wird eine
+**zweite, vollständige Review-Runde** gegen den neuen Commit durchgeführt — das Ergebnis von
+Runde 1 wird nicht auf den geänderten Stand übertragen.

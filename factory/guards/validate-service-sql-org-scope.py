@@ -26,11 +26,12 @@ What is checked, per SQL string literal passed to .execute(),
 .executemany() or .executescript():
     1. Which tenant-owned tables the statement references, taken from its
        FROM / JOIN / UPDATE / INSERT INTO / DELETE FROM clauses, together
-       with their aliases. Tenant-owned means: the table carries an
-       organization_id column in app/db.py -- users, suppliers,
-       procurement_requests, approvals, audit_log, audit_log_archive,
-       jobs. The organizations table itself is not tenant-owned (it IS the
-       tenant) and is ignored.
+       with their aliases. A comma-separated FROM list ("FROM a x, b y")
+       counts as a reference to every table in it, not just the first.
+       Tenant-owned means: the table carries an organization_id column in
+       app/db.py -- users, suppliers, procurement_requests, approvals,
+       audit_log, audit_log_archive, jobs. The organizations table itself
+       is not tenant-owned (it IS the tenant) and is ignored.
     2. For a read/update/delete statement, each referenced tenant-owned
        table must appear in an organization_id predicate:
            <alias>.organization_id = ?          (or a named parameter)
@@ -38,16 +39,29 @@ What is checked, per SQL string literal passed to .execute(),
        For a statement that references exactly one table and gives it no
        alias, the unqualified form organization_id = ? is accepted too --
        it is unambiguous there.
-    3. For INSERT INTO <tenant table>, the column list must name
-       organization_id.
+    3. For INSERT INTO <tenant table>, the column list must exist and must
+       name organization_id: a row of a tenant-owned table has to state
+       its tenant explicitly. An INSERT that reads its rows from a SELECT
+       is additionally checked like a read statement, for every source
+       table it selects from -- only the insert target itself is exempt
+       from needing a predicate, since it is being written, not filtered.
 
 Deliberately NOT attempted (same posture as
-factory/guards/validate-job-handler-scope.py): this guard reads only
-statically visible string literals. SQL assembled at runtime -- f-strings,
-concatenation of non-literals, a query built by a helper, getattr
-indirection -- is not analyzed and is reported as skipped, not as safe. It
-is a second layer over the actual boundary (the predicate in the query),
-never a substitute for it.
+factory/guards/validate-job-handler-scope.py):
+    - This guard reads only statically visible string literals. SQL
+      assembled at runtime -- f-strings, concatenation of non-literals, a
+      query built by a helper, getattr indirection -- is not analyzed and
+      is reported as skipped, not as safe.
+    - It checks the presence of a predicate, never the VALUE bound to it.
+      "pr.organization_id = ?" bound to a foreign organization_id passes.
+      The caller convention (services take the caller's organization_id
+      and pass it through) remains the actual boundary.
+    - It does not parse SQL. Subqueries, CTEs (WITH ...) and derived
+      tables are seen only through the same FROM/JOIN scan as the outer
+      query, so a tenant table referenced exclusively inside a construct
+      this scan does not reach is not checked.
+It is a second layer over the actual boundary (the predicate in the
+query), never a substitute for it.
 
 Exit code 0: no violation found (including files with no raw SQL at all).
 Exit code 1: at least one statement references a tenant-owned table
@@ -100,13 +114,30 @@ SQL_KEYWORDS_AFTER_TABLE = {
 }
 
 TABLE_REF_RE = re.compile(
-    r"\b(?:from|join|update|into)\s+([A-Za-z_][A-Za-z0-9_]*)"
+    r"\b(from|join|update|into)\s+([A-Za-z_][A-Za-z0-9_]*)"
     r"(?:\s+(?:as\s+)?([A-Za-z_][A-Za-z0-9_]*))?",
     re.IGNORECASE,
 )
 
-INSERT_INTO_RE = re.compile(
-    r"\binsert\s+into\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)", re.IGNORECASE
+# Additional tables of a comma-separated FROM list ("FROM a x, b y"), read
+# from the text that follows the first table of a FROM clause up to the
+# next clause keyword.
+FROM_LIST_TAIL_RE = re.compile(
+    r"^((?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*(?:\s+(?:as\s+)?[A-Za-z_][A-Za-z0-9_]*)?)+)",
+    re.IGNORECASE,
+)
+
+FROM_LIST_ENTRY_RE = re.compile(
+    r",\s*([A-Za-z_][A-Za-z0-9_]*)(?:\s+(?:as\s+)?([A-Za-z_][A-Za-z0-9_]*))?",
+    re.IGNORECASE,
+)
+
+INSERT_TARGET_RE = re.compile(
+    r"\binsert\s+into\s+([A-Za-z_][A-Za-z0-9_]*)\s*(\()?", re.IGNORECASE
+)
+
+INSERT_COLUMNS_RE = re.compile(
+    r"\binsert\s+into\s+[A-Za-z_][A-Za-z0-9_]*\s*\(([^)]*)\)", re.IGNORECASE
 )
 
 # Right-hand side of an accepted organization_id predicate: a positional
@@ -119,14 +150,34 @@ def normalize(sql):
 
 
 def find_table_references(sql):
-    """Return a list of (table_name, alias_or_None) in statement order."""
+    """Return a list of (table_name, alias_or_None, clause) in statement order.
+
+    `clause` is the keyword that introduced the reference ("from", "join",
+    "update", "into"), lowercased -- callers need it to tell an INSERT
+    target apart from the tables an INSERT ... SELECT reads from.
+    """
     references = []
     for match in TABLE_REF_RE.finditer(sql):
-        table = match.group(1)
-        alias = match.group(2)
+        clause = match.group(1).lower()
+        table = match.group(2)
+        alias = match.group(3)
         if alias is not None and alias.lower() in SQL_KEYWORDS_AFTER_TABLE:
             alias = None
-        references.append((table, alias))
+        references.append((table, alias, clause))
+
+        if clause != "from":
+            continue
+
+        # "FROM a x, b y": pick up every further table of the comma list.
+        tail_match = FROM_LIST_TAIL_RE.match(sql[match.end():])
+        if not tail_match:
+            continue
+        for entry in FROM_LIST_ENTRY_RE.finditer(tail_match.group(1)):
+            entry_alias = entry.group(2)
+            if entry_alias is not None and entry_alias.lower() in SQL_KEYWORDS_AFTER_TABLE:
+                entry_alias = None
+            references.append((entry.group(1), entry_alias, "from"))
+
     return references
 
 
@@ -145,14 +196,29 @@ def has_unqualified_predicate(sql):
     return bool(pattern.search(sql))
 
 
-def check_insert_statements(sql):
-    """Return error strings for INSERTs into tenant tables lacking the column."""
+def check_insert_targets(sql):
+    """Return error strings for INSERTs into tenant tables that do not set
+    the tenant explicitly: a missing column list is rejected just like a
+    column list without organization_id, since neither states the tenant."""
     errors = []
-    for match in INSERT_INTO_RE.finditer(sql):
+    columns_by_position = {
+        match.start(): match.group(1) for match in INSERT_COLUMNS_RE.finditer(sql)
+    }
+
+    for match in INSERT_TARGET_RE.finditer(sql):
         table = match.group(1)
         if table.lower() not in TENANT_TABLES:
             continue
-        columns = [column.strip().lower() for column in match.group(2).split(",")]
+
+        column_text = columns_by_position.get(match.start())
+        if column_text is None:
+            errors.append(
+                f"INSERT INTO '{table}' hat keine explizite Spaltenliste -- ohne sie ist nicht "
+                "pruefbar, dass der Datensatz seine 'organization_id' setzt."
+            )
+            continue
+
+        columns = [column.strip().lower() for column in column_text.split(",")]
         if "organization_id" not in columns:
             errors.append(
                 f"INSERT INTO '{table}' fuehrt keine Spalte 'organization_id' -- ein Datensatz "
@@ -164,15 +230,25 @@ def check_insert_statements(sql):
 def check_statement(sql):
     """Return a list of human-readable error strings for one SQL literal."""
     sql = normalize(sql)
-    errors = check_insert_statements(sql)
+    errors = []
 
     references = find_table_references(sql)
-    is_insert_only = bool(re.match(r"^\s*insert\b", sql, re.IGNORECASE))
-    if is_insert_only:
-        return errors
+    is_insert = bool(re.match(r"^\s*insert\b", sql, re.IGNORECASE))
+
+    if is_insert:
+        errors.extend(check_insert_targets(sql))
+        # A plain INSERT ... VALUES reads nothing, so there is no source to
+        # scope. An INSERT ... SELECT does read, and its source tables are
+        # checked exactly like a read statement -- only the insert target
+        # itself is exempt, because it is written, not filtered.
+        if not re.search(r"\bselect\b", sql, re.IGNORECASE):
+            return errors
+        references = [
+            (table, alias, clause) for table, alias, clause in references if clause != "into"
+        ]
 
     tenant_references = [
-        (table, alias) for table, alias in references if table.lower() in TENANT_TABLES
+        (table, alias) for table, alias, _ in references if table.lower() in TENANT_TABLES
     ]
     single_unaliased_table = len(references) == 1 and references[0][1] is None
 

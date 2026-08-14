@@ -109,6 +109,66 @@ def add_supplier(conn, organization_id, name):
     )
 '''
 
+COMMA_JOIN_UNSCOPED = '''\
+def report(conn, month_prefix):
+    return conn.execute(
+        "SELECT pr.id, s.name FROM procurement_requests pr, suppliers s "
+        "WHERE s.id = pr.supplier_id AND pr.created_at LIKE ?",
+        (month_prefix,),
+    ).fetchall()
+'''
+
+COMMA_JOIN_PARTIALLY_SCOPED = '''\
+def report(conn, organization_id, month_prefix):
+    return conn.execute(
+        "SELECT pr.id, s.name FROM procurement_requests pr, suppliers s "
+        "WHERE pr.organization_id = ? AND s.id = pr.supplier_id AND pr.created_at LIKE ?",
+        (organization_id, month_prefix),
+    ).fetchall()
+'''
+
+COMMA_JOIN_SCOPED = '''\
+def report(conn, organization_id, month_prefix):
+    return conn.execute(
+        "SELECT pr.id, s.name FROM procurement_requests pr, suppliers s "
+        "WHERE pr.organization_id = ? AND s.organization_id = pr.organization_id "
+        "AND s.id = pr.supplier_id AND pr.created_at LIKE ?",
+        (organization_id, month_prefix),
+    ).fetchall()
+'''
+
+INSERT_WITHOUT_COLUMN_LIST = '''\
+def add_supplier(conn, organization_id, name):
+    return conn.execute(
+        "INSERT INTO suppliers VALUES (?, ?, ?)",
+        (organization_id, name, "2026-03-01T00:00:00+00:00"),
+    )
+'''
+
+INSERT_INTO_NON_TENANT_TABLE = '''\
+def add_organization(conn, name):
+    return conn.execute("INSERT INTO organizations VALUES (?, ?)", (name, "2026-03-01"))
+'''
+
+INSERT_SELECT_UNSCOPED_SOURCE = '''\
+def archive(conn, organization_id, threshold):
+    return conn.execute(
+        "INSERT INTO audit_log_archive (organization_id, action, archived_at) "
+        "SELECT organization_id, action, ? FROM audit_log WHERE occurred_at < ?",
+        (threshold, threshold),
+    )
+'''
+
+INSERT_SELECT_SCOPED_SOURCE = '''\
+def archive(conn, organization_id, threshold):
+    return conn.execute(
+        "INSERT INTO audit_log_archive (organization_id, action, archived_at) "
+        "SELECT organization_id, action, ? FROM audit_log "
+        "WHERE organization_id = ? AND occurred_at < ?",
+        (threshold, organization_id, threshold),
+    )
+'''
+
 DYNAMIC_SQL = '''\
 def report(conn, organization_id, column):
     query = "SELECT " + column + " FROM procurement_requests WHERE organization_id = ?"
@@ -188,6 +248,42 @@ class ValidateServiceSqlOrgScopeTests(unittest.TestCase):
         result = self.run_guard(UPDATE_UNSCOPED)
         self.assertEqual(result.returncode, 1)
         self.assertIn("procurement_requests", result.stderr)
+
+    def test_comma_separated_from_list_without_predicates_is_rejected(self):
+        result = self.run_guard(COMMA_JOIN_UNSCOPED)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("procurement_requests", result.stderr)
+        self.assertIn("suppliers", result.stderr)
+
+    def test_comma_separated_from_list_scoping_only_the_first_table_is_rejected(self):
+        # The second table of a comma list must not escape the check just
+        # because it is not introduced by the keyword JOIN.
+        result = self.run_guard(COMMA_JOIN_PARTIALLY_SCOPED)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("suppliers", result.stderr)
+        self.assertNotIn("Tabelle 'procurement_requests'", result.stderr)
+
+    def test_fully_scoped_comma_separated_from_list_is_accepted(self):
+        result = self.run_guard(COMMA_JOIN_SCOPED)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_insert_into_tenant_table_without_column_list_is_rejected(self):
+        result = self.run_guard(INSERT_WITHOUT_COLUMN_LIST)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Spaltenliste", result.stderr)
+
+    def test_insert_into_non_tenant_table_needs_no_column_list(self):
+        result = self.run_guard(INSERT_INTO_NON_TENANT_TABLE)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_insert_select_from_unscoped_source_is_rejected(self):
+        result = self.run_guard(INSERT_SELECT_UNSCOPED_SOURCE)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("audit_log", result.stderr)
+
+    def test_insert_select_from_scoped_source_is_accepted(self):
+        result = self.run_guard(INSERT_SELECT_SCOPED_SOURCE)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_dynamically_built_sql_is_reported_as_not_analyzable(self):
         # The guard must not claim a statement it cannot read is safe: it
