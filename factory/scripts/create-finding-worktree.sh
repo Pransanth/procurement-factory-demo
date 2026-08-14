@@ -16,6 +16,16 @@
 # against the SHA it resolved before the caller is told the worktree is
 # usable.
 #
+# Why --no-track: creating a branch whose start point is a remote-tracking
+# ref (origin/main) makes git set up upstream tracking by default
+# (branch.autoSetupMerge), which writes branch.<name>.remote and
+# branch.<name>.merge into .git/config. This repo's sandbox deliberately
+# denies writes there, so that default fails the whole branch creation with
+# "could not lock config file .git/config: Operation not permitted". That
+# sandbox boundary is wanted and is not to be loosened -- a finding branch
+# simply does not need upstream tracking, so it is created with --no-track
+# and pushed explicitly (`git push origin <branch>`) instead.
+#
 # Usage:
 #   factory/scripts/create-finding-worktree.sh resolve
 #       Fetches origin and prints the current origin/main SHA. Run this
@@ -25,7 +35,8 @@
 #   factory/scripts/create-finding-worktree.sh create <expected-sha> <path> <branch>
 #       Creates a new worktree at <path> on new branch <branch>, directly
 #       from origin/main (never from the current local branch or any
-#       other implicit default). Immediately verifies the new worktree's
+#       other implicit default) and without upstream tracking (see
+#       "Why --no-track" above). Immediately verifies the new worktree's
 #       HEAD equals <expected-sha>, before any other command runs in it.
 #       On match: prints "WORKTREE_READY <path> <branch> <sha>" and exits
 #       0 -- the worktree is safe to enter (e.g. via EnterWorktree with
@@ -34,9 +45,12 @@
 #       "AUTONOMY_BLOCKER: ..." to stderr, and exits 1. The worktree is
 #       never left behind for use.
 #
-# Typical caller sequence:
-#   SHA="$(factory/scripts/create-finding-worktree.sh resolve)"
-#   factory/scripts/create-finding-worktree.sh create "$SHA" .claude/worktrees/P1-DEMO-4 fix/P1-DEMO-4
+# Typical caller sequence -- two separate, simple commands run from the
+# repository root (no command substitution, no subshell, no pipeline): run
+# `resolve`, read the SHA it printed, then pass that SHA literally to
+# `create`.
+#   factory/scripts/create-finding-worktree.sh resolve
+#   factory/scripts/create-finding-worktree.sh create <sha-from-resolve> .claude/worktrees/P1-DEMO-4 fix/P1-DEMO-4
 set -euo pipefail
 
 SUBCOMMAND="${1:-}"
@@ -55,7 +69,7 @@ case "$SUBCOMMAND" in
     WT_PATH="$3"
     BRANCH="$4"
 
-    git worktree add -b "$BRANCH" "$WT_PATH" origin/main
+    git worktree add --no-track -b "$BRANCH" "$WT_PATH" origin/main
 
     ACTUAL_SHA="$(git -C "$WT_PATH" rev-parse HEAD)"
 
