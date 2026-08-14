@@ -81,6 +81,26 @@ def record(conn, organization_id, action):
     return audit_log.record(conn, organization_id, action=action)
 '''
 
+DENYLIST_MEMBERSHIP_CHECK = '''\
+DENIED_ROLES = ("member",)
+
+
+def decide(conn, actor):
+    if actor.role in DENIED_ROLES:
+        raise ValueError("not authorized")
+    return True
+'''
+
+COMPARISON_AGAINST_A_NAMED_CONSTANT = '''\
+MEMBER_ROLE = "member"
+
+
+def decide(conn, actor):
+    if actor.role == MEMBER_ROLE:
+        raise ValueError("not authorized")
+    return True
+'''
+
 UNRELATED_STRING_COMPARISON = '''\
 def submit(conn, request):
     if request.status != "draft":
@@ -151,6 +171,20 @@ class ValidateServiceRoleAuthorizationTests(unittest.TestCase):
     def test_unrelated_string_comparison_is_not_flagged(self):
         # status != "draft" is a state check, not an authorization decision.
         result = self.run_guard(UNRELATED_STRING_COMPARISON)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_known_limitation_denylist_membership_is_not_detected(self):
+        # An exclusion written as a membership test over a denylist is the
+        # same defect in a form this guard does not see. Pinned so the gap
+        # is a recorded limitation rather than an assumed absence; see the
+        # guard's "Deliberately NOT attempted" section.
+        result = self.run_guard(DENYLIST_MEMBERSHIP_CHECK)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_known_limitation_comparison_against_named_constant_is_not_detected(self):
+        # Same class of blind spot: the guard matches string literals, so a
+        # named constant on the right-hand side slips through.
+        result = self.run_guard(COMPARISON_AGAINST_A_NAMED_CONSTANT)
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_missing_file_is_an_error(self):

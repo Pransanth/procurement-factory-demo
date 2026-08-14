@@ -32,8 +32,14 @@ class TestChangeUserRoleEscalation(unittest.TestCase):
         )
         self.admin = users.create(self.conn, self.org.id, "root@acme.example", "Root", "admin")
 
+    # The message is pinned, not just the exception type: every other
+    # ValueError this function can raise (unassignable role, actor or target
+    # not in the organization) would otherwise satisfy assertRaises and let
+    # the authorization check itself disappear unnoticed.
+    NOT_AUTHORIZED = "not authorized to administer user roles"
+
     def test_approver_cannot_promote_themselves_to_admin(self):
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(ValueError, self.NOT_AUTHORIZED):
             user_admin_service.change_user_role(
                 self.conn, self.org.id, self.approver.id, self.approver.id, "admin"
             )
@@ -42,14 +48,14 @@ class TestChangeUserRoleEscalation(unittest.TestCase):
         )
 
     def test_approver_cannot_promote_a_colleague(self):
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(ValueError, self.NOT_AUTHORIZED):
             user_admin_service.change_user_role(
                 self.conn, self.org.id, self.approver.id, self.member.id, "admin"
             )
         self.assertEqual(users.get_by_id(self.conn, self.org.id, self.member.id).role, "member")
 
     def test_rejected_escalation_writes_no_audit_log_entry(self):
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(ValueError, self.NOT_AUTHORIZED):
             user_admin_service.change_user_role(
                 self.conn, self.org.id, self.approver.id, self.approver.id, "admin"
             )
@@ -63,6 +69,19 @@ class TestChangeUserRoleEscalation(unittest.TestCase):
         self.assertEqual(
             users.get_by_id(self.conn, self.org.id, self.member.id).role, "approver"
         )
+
+    def test_admin_may_still_demote_themselves(self):
+        # Deliberately permitted, and pinned here so the decision cannot be
+        # reversed silently: the fix adds no self-change ban, because with an
+        # admin-only allowlist a self-change can only reduce privilege, and
+        # forbidding it would remove the only way an admin can step down.
+        # (Contrast P1-DEMO-3, where self-approval is barred regardless of
+        # role, because deciding one's own request is an integrity problem.)
+        updated = user_admin_service.change_user_role(
+            self.conn, self.org.id, self.admin.id, self.admin.id, "member"
+        )
+        self.assertEqual(updated.role, "member")
+        self.assertEqual(users.get_by_id(self.conn, self.org.id, self.admin.id).role, "member")
 
 
 if __name__ == "__main__":

@@ -181,3 +181,57 @@ python3 -m unittest factory.guards.test_validate_finding factory.guards.test_val
 python3 .claude/hooks/test_stop_validate_findings.py
 # 5 tests -> OK
 ```
+
+## Nacharbeit aus Review-Runde 1
+
+Review-Runde 1 (`finding-closure-reviewer`, Reviewed Commit
+`0df18bc154e6adc44ecf86d1e76cb686fbf3361b`) endete mit `Result: PASS` und ohne blockierende
+Einwände; der Reviewer bestätigte durch eigenes Nachverfolgen der AST-Logik, dass der Guard alle
+vier Formen (Normalform, vertauschte Operanden, einfache Variable, `!=`) erkennt und die
+Allowlist-Form durchlässt, und stimmte der bewussten Auslassung eines Selbstverbots ausdrücklich
+zu. Drei nicht blockierende Punkte wurden trotzdem vor dem Abschluss erledigt, statt sie als
+"Risiko" stehenzulassen:
+
+1. **Überzeichnete Formulierung im Finding.** Der Central Guard Plan sagte, der Guard mache die
+   Ausschluss-Form "unschreibbar" in der Service-Schicht. Tatsächlich matcht er *Vergleiche gegen
+   String-Literale*; zwei Umschreibungen derselben Entscheidung kommen durch — ein Vergleich gegen
+   eine benannte Konstante (`actor.role == MEMBER_ROLE`) und ein Ausschluss als
+   Mitgliedschaftstest über eine Denylist (`if actor.role in DENIED_ROLES`). Der Satz ist
+   korrigiert, beide Lücken stehen jetzt ausdrücklich im Guard-Docstring und sind als
+   Known-Limitation-Fixtures festgehalten
+   (`test_known_limitation_comparison_against_named_constant_is_not_detected`,
+   `test_known_limitation_denylist_membership_is_not_detected`) — eine dokumentierte Lücke statt
+   einer stillschweigend angenommenen Abwesenheit.
+2. **`assertRaises` → `assertRaisesRegex`.** Die drei Ablehnungsfälle prüften nur den Ausnahmetyp.
+   `change_user_role` kann `ValueError` auch aus drei anderen Gründen werfen (unzulässiger
+   Rollenwert, Akteur oder Ziel nicht in der Organisation), sodass ein späteres Entfernen der
+   Autorisierungsprüfung selbst unbemerkt bleiben könnte. Die Tests pinnen jetzt die Meldung
+   `not authorized to administer user roles`. Das ist eine **Verschärfung** der Assertionen, keine
+   Abschwächung.
+3. **Bewusste Auslassung war durch nichts festgehalten.** Ein neuer Test
+   (`test_admin_may_still_demote_themselves`) sichert die dokumentierte Entscheidung ab, dass ein
+   `admin` die eigene Rolle weiterhin herabstufen darf — damit kann sie nicht stillschweigend
+   umgedreht werden.
+
+Nicht geändert (bewusst, mit Begründung): `app/repositories/users.py:update_role` bleibt
+unauthentifiziert — sie ist die Speicherschicht, die Entscheidung liegt in der Service-Funktion
+(außerhalb des Scopes dieses Bauauftrags). Der Guard bleibt auf `app/services/` beschränkt; die
+gleichartige Entscheidung in `app/repositories/approvals.py` liegt außerhalb dieses Findings und
+ist dort bereits in der korrekten Allowlist-Form geschrieben.
+
+```
+python3 -m unittest app.services.test_user_admin_role_escalation_regression -v
+# 5 tests -> OK (4 aus Runde 1 + 1 neuer Selbst-Herabstufungs-Test, verschärfte Assertionen)
+
+python3 -m unittest factory.guards.test_validate_service_role_authorization -v
+# 12 tests -> OK (10 aus Runde 1 + 2 Known-Limitation-Fixtures)
+
+python3 factory/guards/run-app-tests.py
+# 77 tests -> OK
+
+python3 factory/guards/run-factory-checks.py
+# Factory-Checks: ALLE BESTANDEN
+```
+
+Weil sich Guard-Docstring und Tests gegenüber dem reviewten Commit geändert haben, wird eine
+**zweite, vollständige Review-Runde** gegen den neuen Commit durchgeführt.

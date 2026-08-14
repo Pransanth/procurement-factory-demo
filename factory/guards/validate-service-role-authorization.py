@@ -41,7 +41,13 @@ Deliberately NOT attempted (same posture as the other guards here):
       function -- provides the actual guarantee.
     - It does not follow values. A role compared through an intermediate
       variable with an unrecognized name, a dict lookup, or a helper
-      function is not recognized as a role comparison.
+      function is not recognized as a role comparison. Concretely, two
+      ways to write the same defect pass this guard: a comparison against
+      a NAMED constant ("actor.role == MEMBER_ROLE") instead of a string
+      literal, and an exclusion expressed as a membership test over a
+      denylist ("if actor.role in DENIED_ROLES: raise"). Both are pinned
+      as known-limitation fixtures in this guard's tests so the gap is
+      recorded rather than implied.
     - It says nothing about which roles exist; app/db.py's CHECK
       constraint remains the authority on that.
 
