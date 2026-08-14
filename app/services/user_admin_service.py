@@ -11,6 +11,14 @@ from app.repositories import audit_log, users
 
 ASSIGNABLE_ROLES = ("member", "approver", "admin")
 
+# Which roles may administer other users' roles. This is an allowlist, not a
+# denylist, on purpose: naming who may act keeps a newly added role
+# unprivileged by default, whereas naming who may not act silently grants
+# authority to every role nobody thought to exclude (finding P1-DEMO-5).
+# 'approver' decides procurement requests (app/repositories/approvals.py); it
+# is not administrative.
+ROLE_ADMINISTERING_ROLES = ("admin",)
+
 
 def change_user_role(conn, organization_id, actor_user_id, target_user_id, new_role):
     """Set `target_user_id`'s role to `new_role` on behalf of `actor_user_id`.
@@ -28,7 +36,7 @@ def change_user_role(conn, organization_id, actor_user_id, target_user_id, new_r
     if actor is None:
         raise ValueError(f"actor {actor_user_id} not found in organization {organization_id}")
 
-    if actor.role == "member":
+    if actor.role not in ROLE_ADMINISTERING_ROLES:
         raise ValueError(
             f"user {actor_user_id} has role '{actor.role}' and is not authorized to "
             "administer user roles"

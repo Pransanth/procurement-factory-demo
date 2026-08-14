@@ -147,6 +147,26 @@ def record(conn, organization_id, action):
     return audit_log.record(conn, organization_id, action=action)
 '''
 
+# The authorization check of app/services/user_admin_service.py exactly as
+# it read before the P1-DEMO-5 fix: authority decided by excluding one role.
+EXCLUSION_ROLE_CHECK = '''\
+def change_user_role(conn, organization_id, actor, target_user_id, new_role):
+    if actor.role == "member":
+        raise ValueError("not authorized")
+    return users.update_role(conn, organization_id, target_user_id, new_role)
+'''
+
+# The same check after the fix: membership test against an allowlist.
+ALLOWLIST_ROLE_CHECK = '''\
+ROLE_ADMINISTERING_ROLES = ("admin",)
+
+
+def change_user_role(conn, organization_id, actor, target_user_id, new_role):
+    if actor.role not in ROLE_ADMINISTERING_ROLES:
+        raise ValueError("not authorized")
+    return users.update_role(conn, organization_id, target_user_id, new_role)
+'''
+
 
 class RunFactoryChecksTests(unittest.TestCase):
     def setUp(self):
@@ -324,6 +344,37 @@ class RunFactoryChecksTests(unittest.TestCase):
         combined = result.stdout + result.stderr
         self.assertIn("[FEHLER] finding-validator: broken.md", combined)
         self.assertIn("[FEHLER] service-sql-guard: reporting_service.py", combined)
+
+    def test_allowlist_role_check_passes(self):
+        self.write_service_file("user_admin_service.py", ALLOWLIST_ROLE_CHECK)
+        result = self.run_runner()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("[OK]     service-role-guard: user_admin_service.py", result.stdout)
+
+    def test_exclusion_role_check_fails(self):
+        self.write_service_file("user_admin_service.py", EXCLUSION_ROLE_CHECK)
+        result = self.run_runner()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("[FEHLER] service-role-guard: user_admin_service.py", result.stderr)
+        self.assertIn("FEHLGESCHLAGEN", result.stderr)
+
+    def test_service_file_without_role_logic_passes_the_role_guard(self):
+        self.write_service_file("plain_service.py", SERVICE_WITHOUT_SQL)
+        result = self.run_runner()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("[OK]     service-role-guard: plain_service.py", result.stdout)
+
+    def test_both_service_guards_report_their_own_violation(self):
+        # The two service-layer guards are independent checks over the same
+        # directory: each must report its own file, and either one failing
+        # must fail the whole run.
+        self.write_service_file("reporting_service.py", UNSCOPED_SERVICE_SQL)
+        self.write_service_file("user_admin_service.py", EXCLUSION_ROLE_CHECK)
+        result = self.run_runner()
+        self.assertEqual(result.returncode, 1)
+        combined = result.stdout + result.stderr
+        self.assertIn("[FEHLER] service-sql-guard: reporting_service.py", combined)
+        self.assertIn("[FEHLER] service-role-guard: user_admin_service.py", combined)
 
     def test_ready_for_closure_finding_with_matching_pass_review_passes_end_to_end(self):
         # validate-review.py's "Finding" cross-check always resolves against

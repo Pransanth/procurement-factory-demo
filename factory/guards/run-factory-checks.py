@@ -6,7 +6,7 @@ passes the factory's automated checks. Everything else -- the local Stop
 hook, GitHub CI -- is expected to call this script rather than
 re-implement its own checking logic.
 
-There are four kinds of check, run in order:
+There are five kinds of check, run in order:
   1. Every finding under factory/findings/ must pass
      factory/guards/validate-finding.py. For a finding trying to reach
      READY_FOR_CLOSURE/CLOSED, this already includes checking that its
@@ -29,6 +29,12 @@ There are four kinds of check, run in order:
      to carry an organization_id predicate for each tenant-owned table it
      touches (see factory/findings/P1-DEMO-4.md). A service file without
      raw SQL passes trivially.
+  5. The same *.py files directly under app/services/ must also pass
+     factory/guards/validate-service-role-authorization.py -- an AST
+     guard that rejects deciding authority by comparing a role against a
+     single string literal (== / !=) instead of testing it against an
+     explicit allowlist (see factory/findings/P1-DEMO-5.md). A service
+     file without role logic passes trivially.
 More kinds can be added later; they would all be run from here, in one
 place, so no caller ever has to duplicate checking logic.
 
@@ -53,6 +59,7 @@ VALIDATOR = THIS_DIR / "validate-finding.py"
 JOB_HANDLER_GUARD = THIS_DIR / "validate-job-handler-scope.py"
 REVIEW_GUARD = THIS_DIR / "validate-review.py"
 SERVICE_SQL_GUARD = THIS_DIR / "validate-service-sql-org-scope.py"
+SERVICE_ROLE_GUARD = THIS_DIR / "validate-service-role-authorization.py"
 DEFAULT_FINDINGS_DIR = THIS_DIR.parent / "findings"
 DEFAULT_JOBS_DIR = THIS_DIR.parent.parent / "app" / "jobs"
 DEFAULT_REVIEWS_DIR = THIS_DIR.parent / "reviews"
@@ -238,6 +245,55 @@ def run_service_sql_checks(services_dir):
     return ok, report
 
 
+def run_service_role_checks(services_dir):
+    """Run the service-layer role-authorization guard against every *.py file
+    in services_dir (test_*.py files are excluded, for the same reason as in
+    run_service_sql_checks above).
+
+    The directory-before-script ordering is deliberate and identical to
+    run_service_sql_checks: a project tree without an app/services/
+    directory has no service-layer role check that could be written as an
+    exclusion, so demanding the guard script there would fail a check with
+    nothing to check. Wherever service files DO exist, a missing guard
+    script is still a hard failure.
+
+    Returns (ok: bool, report_lines: list[str]).
+    """
+    report = []
+
+    if not services_dir.is_dir():
+        report.append(f"Kein Services-Verzeichnis unter {services_dir} -- nichts zu pruefen.")
+        return True, report
+
+    if not SERVICE_ROLE_GUARD.is_file():
+        report.append(f"[FEHLER] Service-Rollen-Guard nicht gefunden: {SERVICE_ROLE_GUARD}")
+        return False, report
+
+    candidate_files = sorted(p for p in services_dir.glob("*.py") if not p.name.startswith("test_"))
+    if not candidate_files:
+        report.append(f"Keine Python-Dateien unter {services_dir} -- nichts zu pruefen.")
+        return True, report
+
+    ok = True
+    for candidate_file in candidate_files:
+        result = subprocess.run(
+            [sys.executable, str(SERVICE_ROLE_GUARD), str(candidate_file)],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            report.append(f"[OK]     service-role-guard: {candidate_file.name}")
+        else:
+            ok = False
+            report.append(f"[FEHLER] service-role-guard: {candidate_file.name}")
+            for stream in (result.stdout, result.stderr):
+                for line in stream.splitlines():
+                    if line.strip():
+                        report.append(f"           {line}")
+
+    return ok, report
+
+
 def main(argv):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -270,9 +326,10 @@ def main(argv):
     jobs_ok, jobs_report = run_job_handler_checks(args.jobs_dir)
     reviews_ok, reviews_report = run_review_checks(args.reviews_dir)
     services_ok, services_report = run_service_sql_checks(args.services_dir)
+    roles_ok, roles_report = run_service_role_checks(args.services_dir)
 
-    ok = finding_ok and jobs_ok and reviews_ok and services_ok
-    report = finding_report + jobs_report + reviews_report + services_report
+    ok = finding_ok and jobs_ok and reviews_ok and services_ok and roles_ok
+    report = finding_report + jobs_report + reviews_report + services_report + roles_report
 
     stream = sys.stdout if ok else sys.stderr
     for line in report:
