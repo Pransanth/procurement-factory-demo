@@ -3,6 +3,7 @@
 from datetime import datetime, timezone
 
 from app.models import ProcurementRequest
+from app.repositories import suppliers
 
 
 def _now():
@@ -34,6 +35,11 @@ def create(
     currency="EUR",
     now=None,
 ):
+    if suppliers.get_by_id(conn, organization_id, supplier_id) is None:
+        raise ValueError(
+            f"supplier {supplier_id} not found in organization {organization_id}"
+        )
+
     timestamp = now or _now()
     cursor = conn.execute(
         "INSERT INTO procurement_requests "
