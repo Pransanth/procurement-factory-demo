@@ -50,3 +50,19 @@ Tests oder Sicherheitskontrollen dürfen niemals abgeschwächt, übersprungen od
 nur damit etwas grün wird oder ein Status schneller erreicht wird. Wenn ein Test oder eine
 Kontrolle einem Fix im Weg steht, ist das ein Signal, den Fix oder die Analyse zu überdenken —
 nicht die Kontrolle zu schwächen.
+
+## Mehrere Findings gleichzeitig: Worktree statt Branch-Wechsel im selben Verzeichnis
+
+`.claude/hooks/`, `.claude/skills/`, `.claude/agents/`, `.claude/settings.json` und
+`.claude/settings.local.json` sind absichtlich vor Schreibzugriff geschützt (siehe
+`.claude/settings.json` → `sandbox.filesystem.denyWrite` und `permissions.deny`) — sowohl für den
+Bash-Sandbox als auch für Edit/Write. Reproduzierter Nebeneffekt: wechselt `git checkout`/`git
+switch` im Hauptverzeichnis zwischen Commits, die sich in diesen Pfaden unterscheiden, kann der
+Wechsel dort nicht vollständig schreiben und bricht in einem inkonsistenten Zwischenzustand ab.
+
+Da diese Pfade jetzt für jeden künftigen Commit ausnahmslos gesperrt sind, können normale,
+künftige Finding-Branches darin gar nicht mehr voneinander abweichen — reines Hin- und
+Herwechseln ist damit wieder unbedenklich. Für **echt gleichzeitige** Arbeit an mehreren Findings
+(z. B. zwei P1 im selben Lauf) trotzdem bevorzugt **EnterWorktree** pro Finding-Branch verwenden,
+statt im Hauptverzeichnis zwischen Branches zu wechseln — das hält beide Findings sauber getrennt
+und vermeidet jede Abhängigkeit von der obigen Analyse.
