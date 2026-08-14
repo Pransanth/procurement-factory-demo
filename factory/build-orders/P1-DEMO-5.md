@@ -280,3 +280,35 @@ im Workflow vorgesehen — erst mit dem Closure-Commit gesetzt, nachdem eine Rev
 
 Es folgt eine **dritte, vollständige Review-Runde**. Der `FAIL` aus Runde 2 wird nicht
 überschrieben oder umgedeutet: er bleibt als Grund dokumentiert, warum es diese Runde gibt.
+
+## Abschluss: Review-Runde 3
+
+Runde 3 (Reviewed Commit `7e6dfde`, Reviewer Agent ID `a75ffdcef8be2d131`) endete mit
+`Result: PASS` und **ohne Einwände**. Der Reviewer hat die beanstandete Zahl nicht übernommen,
+sondern selbst nachgezählt (14 + 7 + 9 + 6 + 22 + 12 = 70) und zusätzlich geprüft, dass die alte
+68 für den damaligen Stand rechnerisch korrekt war — der Verlauf ist damit konsistent, nicht
+nachträglich geglättet. Ebenso hat er jede weitere Zahl im Feld `Verification Evidence` aus dem
+Dateiinhalt reproduziert (23, 19, 77 = 72 + 5, 5, 13, 12) und bestätigt, dass kein bestehender
+Test entfernt, umbenannt oder abgeschwächt wurde.
+
+Das Artefakt unter `factory/reviews/P1-DEMO-5.md` stammt ausschließlich aus dem
+SubagentStop-Hook und wurde bei jeder Runde von ihm überschrieben; es trägt jetzt die Provenienz
+von Runde 3 (`PASS`). Der `FAIL` aus Runde 2 bleibt in diesem Bauauftrag dokumentiert, damit das
+Überschreiben des Artefakts den Verlauf nicht verwischt.
+
+Die von Runde 3 genannten Restrisiken sind bewusste, dokumentierte Grenzen und begründen keine
+weitere Runde:
+
+- `app/repositories/users.py:update_role` bleibt unauthentifiziert (Speicherschicht; die
+  Entscheidung liegt in der Service-Funktion) — außerhalb des Scopes dieses Bauauftrags.
+- Der Guard sieht nur `app/services/` und nur die Literal-Vergleichsform; beide Grenzen stehen im
+  Docstring und sind als Fixtures festgehalten.
+- `.github/workflows/factory-ci.yml` führt die Guard-Unit-Tests der beiden neuen Guards nicht
+  einzeln auf; in CI wirken sie über den kanonischen Runner und über
+  `factory.guards.test_run_factory_checks`. Eine Workflow-Änderung war ausdrücklich außerhalb des
+  Schreib-Scopes dieses Laufs.
+- Dass ein `admin` sich selbst herabstufen darf, ist die bewusst getroffene Entscheidung dieses
+  Bauauftrags und jetzt durch einen Test festgehalten.
+
+Damit sind alle Acceptance Criteria erfüllt; das Finding geht auf `READY_FOR_CLOSURE` und
+anschließend auf `CLOSED`, beides von `validate-finding.py` und dem kanonischen Runner bestätigt.
