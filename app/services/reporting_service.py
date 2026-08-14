@@ -39,10 +39,11 @@ def monthly_spend_report(
         "s.name AS supplier_name "
         "FROM procurement_requests pr "
         "JOIN suppliers s ON s.id = pr.supplier_id "
-        "WHERE pr.status = 'approved' AND pr.created_at LIKE ? "
+        "AND s.organization_id = pr.organization_id "
+        "WHERE pr.organization_id = ? AND pr.status = 'approved' AND pr.created_at LIKE ? "
         "ORDER BY pr.amount_cents DESC, pr.id ASC "
         "LIMIT ?",
-        (month_prefix, top_line_item_limit),
+        (organization_id, month_prefix, top_line_item_limit),
     ).fetchall()
 
     return {

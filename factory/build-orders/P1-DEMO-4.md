@@ -105,12 +105,87 @@ Schicht über der eigentlichen Grenze — dem Prädikat in der Abfrage —, kein
 
 ## Red Regression Evidence
 
-*(wird in `IMPLEMENTING` mit dem tatsächlichen Lauf gefüllt)*
+```
+python3 -m unittest app.services.test_reporting_org_scope_regression -v
+```
+```
+test_foreign_line_items_do_not_displace_own_items_from_the_top_list ... FAIL
+AssertionError: Lists differ: ['B confidential tooling', 'A laptops'] != ['A laptops', 'A chairs']
+test_headline_totals_stay_scoped_to_the_requested_organization ... ok
+test_top_line_items_contain_no_foreign_organizations_data ... FAIL
+AssertionError: Lists differ: ['B confidential tooling', 'A laptops'] != ['A laptops']
+
+Ran 3 tests in 0.004s
+FAILED (failures=2)
+```
+Beide Fehlschläge sind `AssertionError` an der Sicherheits-Assertion selbst: die Position
+`B confidential tooling` der fremden Organisation erscheint in `top_line_items` von Org A und
+verdrängt bei `top_line_item_limit=2` zusätzlich die eigene Position `A chairs` aus der Liste.
+Kein Import-, Namens- oder Syntaxfehler. Der dritte Test (`...headline_totals...`) ist bereits
+vor dem Fix grün — er sichert die schon korrekte Kopfzahlen-Abfrage gegen eine Beschädigung
+durch die Reparatur ab.
 
 ## Green Runtime Fix Evidence
 
-*(wird in `IMPLEMENTING` mit dem tatsächlichen Lauf gefüllt)*
+Änderung: `app/services/reporting_service.py:monthly_spend_report()` bindet in der
+Line-Item-Abfrage jetzt `WHERE pr.organization_id = ?` mit `organization_id` als erstem
+Bind-Parameter und verknüpft den Join tenant-gebunden
+(`JOIN suppliers s ON s.id = pr.supplier_id AND s.organization_id = pr.organization_id`). Die
+Kopfzahlen-Abfrage ist unverändert.
+
+```
+python3 -m unittest app.services.test_reporting_org_scope_regression -v
+# 3 tests -> OK (unveränderte Assertionen, jetzt grün)
+
+python3 -m unittest app.services.test_reporting_service app.test_multi_tenant_isolation -v
+# 10 tests -> OK
+
+python3 factory/guards/run-app-tests.py
+# 72 tests -> OK (69 bestehende + 3 neue Regressionstests)
+```
 
 ## Central Guard Evidence
 
-*(wird in `IMPLEMENTING` mit dem tatsächlichen Lauf gefüllt)*
+Neuer Guard `factory/guards/validate-service-sql-org-scope.py`, eingehängt als vierter Check in
+`factory/guards/run-factory-checks.py` (`--services-dir`, Default `app/services`).
+
+```
+python3 factory/guards/validate-service-sql-org-scope.py app/services/reporting_service.py
+# GÜLTIG: app/services/reporting_service.py (2 SQL-Statement(s) mit organization_id-Praedikat)
+
+python3 factory/guards/validate-service-sql-org-scope.py app/services/procurement_service.py
+# ÜBERSPRUNGEN: app/services/procurement_service.py (kein rohes SQL in dieser Datei)
+
+python3 -m unittest factory.guards.test_validate_service_sql_org_scope -v
+# 12 tests -> OK, darunter test_unfixed_reporting_query_is_rejected (die Abfrage im Zustand VOR
+# dem Fix wird zurückgewiesen) und test_fixed_reporting_query_is_accepted (die Abfrage NACH dem
+# Fix wird akzeptiert)
+
+python3 -m unittest factory.guards.test_run_factory_checks -v
+# 19 tests -> OK (15 bestehende + 4 neue: scoped/unscoped/ohne-SQL/test_*-ausgenommen; diese
+# Datei läuft in GitHub CI, damit die neue Regel dort real mitgeprüft wird)
+
+python3 factory/guards/run-factory-checks.py
+# Factory-Checks: ALLE BESTANDEN (inkl. [OK] service-sql-guard: reporting_service.py)
+```
+
+Ein während der Implementierung aufgetretener, echter Fehlschlag ist hier bewusst dokumentiert:
+`.claude/hooks/test_stop_validate_findings.py` baut Wegwerf-Projekte, die nur die vier bisherigen
+Guard-Skripte kopieren und **kein** `app/services/`-Verzeichnis haben. Die erste Fassung von
+`run_service_sql_checks()` prüfte die Existenz des Guard-Skripts vor der Frage, ob überhaupt
+etwas zu prüfen ist, und ließ diesen Test rot laufen. Korrigiert wurde die **Reihenfolge** im
+Runner (erst "gibt es Service-Dateien?", dann "gibt es das Guard-Skript?") — ausdrücklich nicht
+der Test und ausdrücklich keine Abschwächung: sobald `app/services/` existiert, ist ein fehlendes
+Guard-Skript weiterhin ein harter Fehlschlag. Die Hook-Testdatei selbst wurde nicht angefasst
+(sie ist schreibgeschützt und liegt außerhalb des Scopes).
+
+```
+python3 .claude/hooks/test_stop_validate_findings.py
+# 5 tests -> OK (nach der Reihenfolge-Korrektur)
+
+python3 -m unittest factory.guards.test_validate_finding factory.guards.test_validate_job_handler_scope factory.guards.test_validate_review factory.guards.test_create_finding_worktree
+# 36 tests -> OK
+
+python3 .claude/hooks/test_subagentstop_write_review.py
+# 13 tests -> OK
+```

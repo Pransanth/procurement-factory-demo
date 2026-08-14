@@ -3,10 +3,10 @@
 Run with:
     python3 -m unittest factory.guards.test_run_factory_checks
 
-These tests point the real runner at temporary findings/jobs/reviews
-directories via --findings-dir / --jobs-dir / --reviews-dir, so the real
-factory/findings/P1-DEMO-1.md, the real app/jobs/ files and the real
-factory/reviews/ are never touched. Tests that only exercise one check
+These tests point the real runner at temporary findings/jobs/reviews/services
+directories via --findings-dir / --jobs-dir / --reviews-dir / --services-dir,
+so the real factory/findings/P1-DEMO-1.md, the real app/jobs/ files, the real
+app/services/ files and the real factory/reviews/ are never touched. Tests that only exercise one check
 dimension pass empty directories for the others so each test stays
 hermetic and isolated to the one check kind it is about. Review fixtures
 reference "Finding: P1-DEMO-1" -- that finding genuinely exists in this
@@ -111,6 +111,42 @@ Finding: P1-DEMO-1
 Result: PASS
 """
 
+# The line-item query of app/services/reporting_service.py exactly as it
+# read before the P1-DEMO-4 fix: no organization_id predicate anywhere.
+UNSCOPED_SERVICE_SQL = '''\
+def monthly_spend_report(conn, organization_id, month_prefix, limit):
+    return conn.execute(
+        "SELECT pr.id, s.name AS supplier_name "
+        "FROM procurement_requests pr "
+        "JOIN suppliers s ON s.id = pr.supplier_id "
+        "WHERE pr.status = 'approved' AND pr.created_at LIKE ? "
+        "LIMIT ?",
+        (month_prefix, limit),
+    ).fetchall()
+'''
+
+# The same query after the fix: tenant predicate plus tenant-bound join.
+SCOPED_SERVICE_SQL = '''\
+def monthly_spend_report(conn, organization_id, month_prefix, limit):
+    return conn.execute(
+        "SELECT pr.id, s.name AS supplier_name "
+        "FROM procurement_requests pr "
+        "JOIN suppliers s ON s.id = pr.supplier_id "
+        "AND s.organization_id = pr.organization_id "
+        "WHERE pr.organization_id = ? AND pr.status = 'approved' AND pr.created_at LIKE ? "
+        "LIMIT ?",
+        (organization_id, month_prefix, limit),
+    ).fetchall()
+'''
+
+SERVICE_WITHOUT_SQL = '''\
+from app.repositories import audit_log
+
+
+def record(conn, organization_id, action):
+    return audit_log.record(conn, organization_id, action=action)
+'''
+
 
 class RunFactoryChecksTests(unittest.TestCase):
     def setUp(self):
@@ -118,9 +154,11 @@ class RunFactoryChecksTests(unittest.TestCase):
         self.findings_dir = Path(self.tmp_dir) / "findings"
         self.jobs_dir = Path(self.tmp_dir) / "jobs"
         self.reviews_dir = Path(self.tmp_dir) / "reviews"
+        self.services_dir = Path(self.tmp_dir) / "services"
         self.findings_dir.mkdir()
         self.jobs_dir.mkdir()
         self.reviews_dir.mkdir()
+        self.services_dir.mkdir()
         self.addCleanup(self._cleanup)
 
     def _cleanup(self):
@@ -137,6 +175,9 @@ class RunFactoryChecksTests(unittest.TestCase):
     def write_review(self, name, content):
         (self.reviews_dir / name).write_text(content, encoding="utf-8")
 
+    def write_service_file(self, name, content):
+        (self.services_dir / name).write_text(content, encoding="utf-8")
+
     def run_runner(self):
         return subprocess.run(
             [
@@ -148,6 +189,8 @@ class RunFactoryChecksTests(unittest.TestCase):
                 str(self.jobs_dir),
                 "--reviews-dir",
                 str(self.reviews_dir),
+                "--services-dir",
+                str(self.services_dir),
             ],
             capture_output=True,
             text=True,
@@ -245,6 +288,42 @@ class RunFactoryChecksTests(unittest.TestCase):
         result = self.run_runner()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("ALLE BESTANDEN", result.stdout)
+
+    def test_scoped_service_sql_passes(self):
+        self.write_service_file("reporting_service.py", SCOPED_SERVICE_SQL)
+        result = self.run_runner()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("[OK]     service-sql-guard: reporting_service.py", result.stdout)
+
+    def test_unscoped_service_sql_fails(self):
+        self.write_service_file("reporting_service.py", UNSCOPED_SERVICE_SQL)
+        result = self.run_runner()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("[FEHLER] service-sql-guard: reporting_service.py", result.stderr)
+        self.assertIn("FEHLGESCHLAGEN", result.stderr)
+
+    def test_service_file_without_sql_passes_trivially(self):
+        self.write_service_file("plain_service.py", SERVICE_WITHOUT_SQL)
+        result = self.run_runner()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("[OK]     service-sql-guard: plain_service.py", result.stdout)
+
+    def test_test_prefixed_service_files_are_not_checked(self):
+        # test_*.py files are not production service code; the runner must
+        # not even ask the guard about them.
+        self.write_service_file("test_reporting_service.py", UNSCOPED_SERVICE_SQL)
+        result = self.run_runner()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("test_reporting_service.py", result.stdout + result.stderr)
+
+    def test_invalid_finding_and_unscoped_service_sql_are_both_reported(self):
+        self.write_finding("broken.md", INVALID_ANALYZED)
+        self.write_service_file("reporting_service.py", UNSCOPED_SERVICE_SQL)
+        result = self.run_runner()
+        self.assertEqual(result.returncode, 1)
+        combined = result.stdout + result.stderr
+        self.assertIn("[FEHLER] finding-validator: broken.md", combined)
+        self.assertIn("[FEHLER] service-sql-guard: reporting_service.py", combined)
 
     def test_ready_for_closure_finding_with_matching_pass_review_passes_end_to_end(self):
         # validate-review.py's "Finding" cross-check always resolves against
