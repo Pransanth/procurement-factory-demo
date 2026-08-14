@@ -278,3 +278,33 @@ python3 factory/guards/run-factory-checks.py
 
 Auch dieser Stand wird erneut unabhängig reviewt (Runde 3), weil sich der Guard-Code seit Runde 2
 wieder geändert hat.
+
+## Abschluss: Review-Runde 3
+
+Runde 3 (Reviewed Commit `32563f7`, Reviewer Agent ID `adba3cafb843eb19c`) endete mit
+`Result: PASS` und bestätigte durch eigenes Nachverfolgen der Regexe, dass die
+Konflikt-Klausel-Lücke geschlossen ist (`INSERT_TARGET_RE` und `INSERT_COLUMNS_RE` teilen sich das
+identische Präfix, weshalb die `match.start()`-Verknüpfung auch für `INSERT OR REPLACE INTO` trägt)
+und dass durch die Erweiterung weder ein neuer False Negative noch ein False Positive entstanden
+ist. Das Artefakt unter `factory/reviews/P1-DEMO-4.md` stammt ausschließlich aus dem
+SubagentStop-Hook; es wurde bei jeder Runde vom Hook überschrieben und trägt jetzt die Provenienz
+von Runde 3.
+
+Zwei offene Punkte aus Runde 3 wurden vor dem Abschluss erledigt:
+
+1. **CI Evidence muss den reviewten Stand abdecken** (harte Vorbedingung, kein Defekt): Der
+   CI-Lauf für `32563f7` (Actions-Run `31810405567`, alle fünf Schritte grün) ist jetzt im Finding
+   eingetragen. Der Closure-Commit selbst enthält nur noch Finding-Metadaten und Punkt 2; sein
+   eigener CI-Lauf wird vor dem Merge geprüft und ist durch den Required Status Check
+   `factory-checks` des main-Rulesets ohnehin erzwungen.
+2. **Docstring-Überzeichnung im Runner**: `run-factory-checks.py` sprach von "Every file under
+   app/services/", während `glob("*.py")` nur die oberste Ebene erfasst. Der Docstring sagt jetzt
+   ausdrücklich "directly under ... (non-recursive, like the jobs check above)" — reine
+   Textkorrektur, keine Verhaltensänderung.
+
+Die restlichen von Runde 3 genannten Punkte sind bewusste, dokumentierte Grenzen (Guard-Unit-Tests
+laufen lokal, in CI wirkt der Guard über den kanonischen Runner und die fünf Runner-Fälle; keine
+Rekursion in Unterverzeichnisse von `app/services/`, die es heute nicht gibt; keine Analyse von
+dynamisch gebautem SQL) und stehen im Guard- bzw. Runner-Docstring. Sie begründen keine weitere
+Runde: an der eigentlichen Sicherheitsgrenze — dem Prädikat in der Abfrage — ändert sich dadurch
+nichts.

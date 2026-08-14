@@ -22,7 +22,8 @@ There are four kinds of check, run in order:
      a review's content is actually correct is not something a
      deterministic script can judge; that is the independent reviewer's
      job (.claude/agents/finding-closure-reviewer.md).
-  4. Every file under app/services/ must pass
+  4. Every *.py file directly under app/services/ (non-recursive, like
+     the jobs check above) must pass
      factory/guards/validate-service-sql-org-scope.py -- an AST guard
      that requires every hand-written SQL statement in the service layer
      to carry an organization_id predicate for each tenant-owned table it
