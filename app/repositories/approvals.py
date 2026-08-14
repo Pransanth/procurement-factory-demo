@@ -40,6 +40,16 @@ def record_decision(
         raise ValueError(
             f"approver {approver_user_id} not found in organization {organization_id}"
         )
+    if approver.role not in ("approver", "admin"):
+        raise ValueError(
+            f"user {approver_user_id} has role '{approver.role}' and is not authorized to "
+            "decide on procurement requests (requires 'approver' or 'admin')"
+        )
+    if approver_user_id == request.requested_by_user_id:
+        raise ValueError(
+            f"user {approver_user_id} cannot decide on procurement request "
+            f"{procurement_request_id}, which they requested themselves (self-approval)"
+        )
 
     decided_at = now or _now()
     cursor = conn.execute(
