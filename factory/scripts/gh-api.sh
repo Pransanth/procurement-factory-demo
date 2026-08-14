@@ -32,13 +32,17 @@ BODY="${3:-}"
 
 REMOTE_URL="$(git config --get remote.origin.url)"
 REPO_SLUG="$(printf '%s' "$REMOTE_URL" | sed -E 's#^(https://github\.com/|git@github\.com:)##; s#\.git$##')"
+REPO_PATH="$(printf '%s' "$REMOTE_URL" | sed -E 's#^(https://github\.com/|git@github\.com:)##')"
 
 if [ -z "$REPO_SLUG" ]; then
   echo "ERROR: could not derive OWNER/REPO from remote.origin.url ($REMOTE_URL)" >&2
   exit 1
 fi
 
-TOKEN="$(printf 'protocol=https\nhost=github.com\n\n' | git credential fill | awk -F= '/^password=/{print $2}')"
+# credential.https://github.com.useHttpPath=true means the repo-specific
+# keychain entry is keyed by path too -- a fill request without `path` won't
+# match it, so `path` is derived from origin's URL and included here.
+TOKEN="$(printf 'protocol=https\nhost=github.com\npath=%s\n\n' "$REPO_PATH" | git credential fill | awk -F= '/^password=/{print $2}')"
 
 if [ -z "$TOKEN" ]; then
   echo "ERROR: no GitHub credential available via git credential-helper for host github.com" >&2
