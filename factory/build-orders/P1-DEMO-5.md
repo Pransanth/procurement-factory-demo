@@ -106,12 +106,78 @@ Schicht über der eigentlichen Grenze (der Prüfung in der Funktion), kein Ersat
 
 ## Red Regression Evidence
 
-*(wird in `IMPLEMENTING` mit dem tatsächlichen Lauf gefüllt)*
+```
+python3 -m unittest app.services.test_user_admin_role_escalation_regression -v
+```
+```
+test_admin_can_still_promote_a_member ... ok
+test_approver_cannot_promote_a_colleague ... FAIL
+AssertionError: ValueError not raised
+test_approver_cannot_promote_themselves_to_admin ... FAIL
+AssertionError: ValueError not raised
+test_rejected_escalation_writes_no_audit_log_entry ... FAIL
+AssertionError: ValueError not raised
+
+Ran 4 tests in 0.003s
+FAILED (failures=3)
+```
+Alle drei Fehlschläge sind `AssertionError: ValueError not raised` an der Sicherheits-Assertion
+selbst: `change_user_role()` gibt für einen `approver`-Akteur klaglos einen aktualisierten `User`
+zurück, statt abzulehnen — sowohl bei der Beförderung der eigenen Person als auch bei der eines
+Kollegen, und der Vorgang landet zusätzlich im Audit-Log. Kein Import-, Namens- oder Syntaxfehler.
+Der vierte Test (`test_admin_can_still_promote_a_member`) ist bereits vor dem Fix grün — er
+verhindert eine "Reparatur", die einfach alles verbietet.
 
 ## Green Runtime Fix Evidence
 
-*(wird in `IMPLEMENTING` mit dem tatsächlichen Lauf gefüllt)*
+Änderung: `app/services/user_admin_service.py` erhält die Modulkonstante
+`ROLE_ADMINISTERING_ROLES = ("admin",)`; die Prüfung `if actor.role == "member"` wird zu
+`if actor.role not in ROLE_ADMINISTERING_ROLES`, an derselben Stelle (nach dem Auflösen des
+Akteurs, vor dem Laden des Ziels, vor jedem Schreibzugriff). Fehlermeldung und Signatur bleiben
+unverändert; kein Selbstverbot, siehe Begründung unter "Primäre Sicherheitsgrenze".
+
+```
+python3 -m unittest app.services.test_user_admin_role_escalation_regression -v
+# 4 tests -> OK (unveränderte Assertionen, jetzt grün)
+
+python3 -m unittest app.services.test_user_admin_service app.repositories.test_users app.test_multi_tenant_isolation -v
+# 19 tests -> OK (keine bestehende Testdatei angefasst)
+
+python3 factory/guards/run-app-tests.py
+# 76 tests -> OK (72 bestehende + 4 neue Regressionstests)
+```
 
 ## Central Guard Evidence
 
-*(wird in `IMPLEMENTING` mit dem tatsächlichen Lauf gefüllt)*
+Neuer Guard `factory/guards/validate-service-role-authorization.py`, eingehängt als fünfter Check
+in `factory/guards/run-factory-checks.py` über das bereits vorhandene `--services-dir`.
+
+```
+python3 factory/guards/validate-service-role-authorization.py app/services/user_admin_service.py
+# GÜLTIG: app/services/user_admin_service.py (keine Rollenpruefung per Gleichheitsvergleich)
+
+python3 -m unittest factory.guards.test_validate_service_role_authorization -v
+# 10 tests -> OK, darunter test_unfixed_exclusion_check_is_rejected (die Prüfzeile im Zustand VOR
+# dem Fix wird zurückgewiesen), test_fixed_allowlist_check_is_accepted (die Zeile NACH dem Fix
+# wird akzeptiert), test_inequality_against_a_single_role_is_rejected (auch die invertierte Form
+# "!= 'admin'" ist eine Einzelrollen-Entscheidung) und
+# test_role_mentioned_only_inside_a_message_is_accepted (ein Rollenwert in einer Fehlermeldung ist
+# kein Vergleich und darf nicht anschlagen -- genau das tut das reparierte Modul)
+
+python3 -m unittest factory.guards.test_run_factory_checks -v
+# 23 tests -> OK (19 bestehende + 4 neue: Allowlist-Form, Ausschluss-Form, Datei ohne Rollenlogik,
+# und beide Service-Guards melden unabhängig voneinander ihre eigene Verletzung; diese Datei läuft
+# in GitHub CI, damit die neue Regel dort real mitgeprüft wird)
+
+python3 factory/guards/run-factory-checks.py
+# Factory-Checks: ALLE BESTANDEN, inkl.
+#   [OK] service-role-guard: procurement_service.py
+#   [OK] service-role-guard: reporting_service.py
+#   [OK] service-role-guard: user_admin_service.py
+
+python3 -m unittest factory.guards.test_validate_finding factory.guards.test_validate_job_handler_scope factory.guards.test_validate_review factory.guards.test_create_finding_worktree factory.guards.test_validate_service_sql_org_scope factory.guards.test_validate_service_role_authorization
+# 68 tests -> OK
+
+python3 .claude/hooks/test_stop_validate_findings.py
+# 5 tests -> OK
+```
